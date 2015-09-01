@@ -39,8 +39,9 @@ ArgValueState getAVS(ArgValueMapTy& map, Value *value) {
   }
   return AVS_UNKNOWN;
   
-  // FIXME: perhaps we could use just map[value] and take advantage of that AVS_UNKNOWN is represented as 0
-  //        but would that be really correct?
+  // FIXME: perhaps we could use just map[value] and take advantage of that
+  //        AVS_UNKNOWN is represented as 0; but would that be really
+  //        correct?
 }
 
 // check if the function calls checkArity (in the entry basic block)
@@ -49,6 +50,12 @@ ArgValueState getAVS(ArgValueMapTy& map, Value *value) {
 //   
 //   checkArity(op, args) -> Rf_checkArity(op, args, call)
 // 
+// Note that looking just at the entry block makes it unnecessary to check
+// for returns from the function.  A more general approach would look at
+// checkArity on all paths returning from the function, possibly spanning
+// across multiple basic blocks.  It seems that checkArity should be in the
+// entry basic block anyway, for code clarity.
+
 bool ensuresArity(Function *fun) {
   
   if (DEBUG) errs() << "ensuresArity: " << fun->getName() << "\n";
