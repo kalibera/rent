@@ -11,6 +11,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <unordered_map>
+#include <vector>
 
 #undef NDEBUG
 #include <assert.h>
@@ -134,4 +135,148 @@ bool ensuresArity(Function *fun) {
     
   }
   return false;
+}
+
+enum ValueStateKind {
+  VSK_CALL = 0,
+  VSK_OP,
+  VSK_ARGS,
+  VSK_ENV,
+  VSK_ARGCNT, /* just to have a macro for 4 - the number of watched arguments */
+  
+  VSK_UNKNOWN
+};
+
+enum ArgValueKind {
+  AVK_CAR = 0,
+  AVK_CDR,
+  AVK_TAG,
+  AVK_NA
+};
+
+struct ValueState {
+
+  ValueStateKind kind;
+  ArgValueKind akind;
+  int argDepth;
+  
+  ValueState(): kind(VSK_UNKNOWN), argDepth(-1) {}
+  
+  bool merge(ValueState other) {
+    
+    if (kind == VSK_UNKNOWN) {
+      return false;
+    }
+    
+    // FIXME: this is very restrictive; it won't e.g. be able to handle loops
+    if (kind != other.kind || akind != other.akind || argDepth != other.argDepth) {
+      kind = VSK_UNKNOWN;
+      akind = AVK_NA;
+      argDepth = -1;
+      return true;
+    }
+    
+    return false;
+  }
+  
+  bool setUnknown() {
+    bool changed = false;
+    
+    if (kind != VSK_UNKNOWN) {
+      kind = VSK_UNKNOWN;
+      changed = true;
+    }
+    
+    if (akind != AVK_NA) {
+      akind = AVK_NA;
+      changed = true;
+    }
+    
+    if (argDepth != -1) {
+      argDepth = -1;
+      changed = true;
+    }
+    
+    return changed;
+  }
+};
+
+typedef std::unordered_map<Value*, ValueState> ValuesMapTy;
+
+struct BlockState {
+
+  BasicBlock *bb;
+  ValuesMapTy vmap;
+  bool checkArityCalled; // check arity _definitely_ called
+  bool escaped[VSK_ARGCNT];  // argument _possibly_ escaped
+  bool dirty;
+  
+  BlockState(BasicBlock *bb): vmap(), checkArityCalled(false), dirty(false) {
+    for(unsigned i = 0; i < VSK_ARGCNT; i++) {
+      escaped[i] = false;
+    }
+  }
+  
+  bool merge(const BlockState& other) {
+
+    bool changed = false;
+
+    if (checkArityCalled && !other.checkArityCalled) {
+      checkArityCalled = false;
+      changed = true;
+    }
+    for(unsigned i = 0; i < VSK_ARGCNT; i++) {
+      if (!escaped[i] && other.escaped[i]) {
+        escaped[i] = true;
+        changed = true;
+      }
+    }
+    for(ValuesMapTy::iterator mi = vmap.begin(), me = vmap.end(); mi != me; ++mi) {
+      
+      Value* value = mi->first;
+      ValueState& thisState = mi->second;
+      
+      auto vsearch = other.vmap.find(value);
+      if (vsearch == other.vmap.end()) {
+        if (thisState.setUnknown()) {
+          changed = true;
+        }
+      } else {
+        ValueState otherState = vsearch->second;
+        if (thisState.merge(otherState)) {
+          changed = true;
+        }
+      }
+    }
+    // NOTE: states in other.vmap that are not in vmap can be ignored, because
+    //   since they are not in vmap, they are to be merged wth unknown state
+  }
+};
+
+typedef std::vector<BlockState> BlockStatesVectorTy; // allow multiple states for a basic block for adaptive merging
+typedef std::unordered_map<BasicBlock*, BlockStatesVectorTy> BlockStatesMapTy;
+typedef std::vector<BasicBlock*> BlocksVectorTy;
+
+DoFunctionInfo analyzeDoFunction(Function *fun) {
+
+  BlocksVectorTy workList;
+  BlockStatesMapTy states;
+  
+  BasicBlock *eb = &fun->getEntryBlock();
+  workList.push_back(eb);
+  states.insert({eb, {BlockState(eb)}});
+  
+  while(!workList.empty()) {
+    BasicBlock *bb = workList.back();
+    workList.pop_back();
+    
+    // choose a dirty state from the given block
+    
+    // TODO: FINISH THIS
+  
+  }
+  
+  DoFunctionInfo res;
+  return res;
+
 }
