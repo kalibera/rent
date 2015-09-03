@@ -206,13 +206,21 @@ int main(int argc, char* argv[]) {
     errs() << "Could not read function table.\n";
     return 2;
   }
+
+  if (0) {
+      dumpFunctionTable(funtab);
+  }
   
   if (1) {
-    dumpFunctionTable(funtab);
+    //errs() << analyzeDoFunction(m->getFunction("do_complex")).str() << "\n";
+    
+    for(FunctionTableTy::iterator fi = funtab.begin(), fe = funtab.end(); fi != fe; ++fi) {
+      FunctionEntry& e = *fi;
+      Function *fun = e.fun;
+      
+      errs() << analyzeDoFunction(fun).str() << "\n"; 
+    }
   }
 
-
   return 0;
-
 }
-
