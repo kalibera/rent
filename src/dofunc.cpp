@@ -461,6 +461,15 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
             continue;
           }
         }
+        if (tgt && (tgt->getName() == "Rf_protect" || tgt->getName() == "Rf_ProtectWithIndex" || tgt->getName() == "Rf_PreserveObject")) {
+          assert(cs.arg_size() > 0);
+          
+          ValueState vs = getVS(vmap, cs.getArgument(0));
+          if (vs.kind == VSK_ARGS && vs.akind == AVK_HEADER) {
+            if (DEBUG) errs() << "   adf: -> protects arguments (which is usually unnecessary) " << *in << "\n";  
+            continue;
+          }
+        }
       } // handled call
 
       if (LoadInst* li = dyn_cast<LoadInst>(in)) { // load of a variable

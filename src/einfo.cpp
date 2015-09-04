@@ -216,6 +216,10 @@ int main(int argc, char* argv[]) {
   }
     
   if (1) {
+
+    // NOTE: some functions will be analyzed multiple times, because they are multiple 
+    // times in the function table
+    
     for(FunctionTableTy::iterator fi = funtab.begin(), fe = funtab.end(); fi != fe; ++fi) {
       FunctionEntry& e = *fi;
       Function *fun = e.fun;
