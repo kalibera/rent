@@ -144,7 +144,7 @@ bool readFunctionTable(Module *m, FunctionTableTy& tbl) {
     ConstantDataArray* nameInit = cast<ConstantDataArray>(nameStr->getInitializer());
     std::string name = nameInit->getAsCString();
     
-    if (DEBUG) errs() << " name: " << name << "function: " << fun->getName() <<  " offset: " << std::to_string(offset) 
+    if (DEBUG) errs() << " name: " << name << " function: " << fun->getName() <<  " offset: " << std::to_string(offset) 
       << " eval: " << std::to_string(eval) << " arity: " << std::to_string(arity) << "\n";
       
     tbl.push_back({FunctionEntry(name, fun, offset, eval, arity)});
@@ -211,9 +211,11 @@ int main(int argc, char* argv[]) {
       dumpFunctionTable(funtab);
   }
   
-  if (1) {
-    //errs() << analyzeDoFunction(m->getFunction("do_complex")).str() << "\n";
+  if (0) {
+    errs() << analyzeDoFunction(m->getFunction("do_if")).str() << "\n";
+  }
     
+  if (1) {
     for(FunctionTableTy::iterator fi = funtab.begin(), fe = funtab.end(); fi != fe; ++fi) {
       FunctionEntry& e = *fi;
       Function *fun = e.fun;

@@ -12,6 +12,7 @@ struct DoFunctionInfo {
   bool checkArityCalled; // on all returning paths
   int effectiveArity;    // maximum index of argument value used + 1
   bool usesTags;	 // a tag may be used
+  bool computesArgsLength;	// uses length on args (or some suffix of it)
 
   bool complexUseOfArgs; // anything except loading arg value, arg tag, calling checkArity
   bool complexUseOfOp;   // any use except checkArity
@@ -20,8 +21,8 @@ struct DoFunctionInfo {
   
   Function *fun;
   
-  DoFunctionInfo(Function *fun): fun(fun), checkArityCalled(false), effectiveArity(-1), usesTags(true), complexUseOfArgs(true),
-    complexUseOfCall(true), complexUseOfEnv(true)  {}; // conservative defaults
+  DoFunctionInfo(Function *fun): fun(fun), checkArityCalled(false), effectiveArity(-1), usesTags(true), computesArgsLength(true),
+    complexUseOfArgs(true), complexUseOfCall(true), complexUseOfEnv(true)  {}; // conservative defaults
     
   std::string str() {
     std::string res = fun->getName();
@@ -42,6 +43,9 @@ struct DoFunctionInfo {
       }
       if (effectiveArity > -1) {
         res += " +" + std::to_string(effectiveArity);
+      }
+      if (computesArgsLength) {
+        res += " !length";
       }
     }
     if (complexUseOfEnv) {

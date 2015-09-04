@@ -153,8 +153,12 @@ enum ArgValueKind {
   AVK_CAR = 0, // pointer into an args cell to the CAR field
   AVK_CDR,     //                                  CDR
   AVK_TAG,     //                                  TAG
-  AVK_HEADER,    // pointer to beginning of the args cell (start of header)
+  AVK_HEADER,  // pointer to beginning of the args cell (start of header)
   AVK_NA       // N/A (not a value related to args)
+  
+  // currently AVK_CDR is a pointer to the location where the pointer to the header of the list is stored
+  // AVK_HEADER is a pointer to where the list is stored
+  // so, the "args" argument is AVK_CDR (because it is something that has to be loaded to get to the header)
 };
 
 struct ValueState {
@@ -386,6 +390,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
   DoFunctionInfo res(fun);  
   res.checkArityCalled = true; // this has a rather iffy semantics
   res.usesTags = false;
+  res.computesArgsLength = false;
   res.effectiveArity = -1;
   res.complexUseOfOp = false;
   res.complexUseOfArgs = false;
@@ -444,6 +449,18 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
             continue;
           }
         }
+        if (tgt && (tgt->getName() == "Rf_length" || tgt->getName() == "Rf_xlength")) {
+
+          // FIXME: we probably will have to model an integer that represents the arg length
+          assert(cs.arg_size() == 1);
+          
+          ValueState vs = getVS(vmap, cs.getArgument(0));
+          if (vs.kind == VSK_ARGS && vs.akind == AVK_HEADER) {
+            res.computesArgsLength = true;
+            if (DEBUG) errs() << "   adf: -> computesArgsLength " << *in << "\n";  
+            continue;
+          }
+        }
       } // handled call
 
       if (LoadInst* li = dyn_cast<LoadInst>(in)) { // load of a variable
@@ -469,7 +486,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
               break;
             case AVK_HEADER:
               res.complexUseOfArgs = true;
-              if (DEBUG) errs() << "   adf: -> HEADER load, error?" << *in << "\n";   
+              if (DEBUG) errs() << "   adf: -> HEADER load, error?" << *in << "\n";
               break;
           }
           continue;
@@ -477,6 +494,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
         
         if (vs.kind != VSK_UNKNOWN) {
           vmap[li] = vs;
+          if (DEBUG) errs() << "   adf: -> known value kind load " << *in << "\n";
         }
         continue;
       } // handled load
@@ -579,27 +597,26 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
       // detect when address of a variable is taken (and all other unsupported uses)
       unsigned nops = in->getNumOperands();
       for(unsigned i = 0; i < nops; i++) {
-        if (AllocaInst *var = dyn_cast<AllocaInst>(in->getOperand(i))) {
-          ValueState vs = getVS(vmap, var);
-          if (DEBUG) errs() << "   adf: -> complex use of do_function argument " << *in << "\n";
-          switch(vs.kind) {
-            case VSK_CALL: res.complexUseOfCall = true; break;
-            case VSK_OP: res.complexUseOfOp = true; break;
-            case VSK_ENV: res.complexUseOfEnv = true; break;
-            case VSK_ARGS:
-              switch(vs.akind) {
-                // FIXME: I am in fact not detecting changes of the arg list
-                case AVK_HEADER:
-                case AVK_CDR:
-                  res.complexUseOfArgs = true; break;
-                case AVK_TAG:
-                  res.usesTags = true; break;
-              }
-              break;
-          }
-          if (vs.kind != VSK_UNKNOWN) {
-            vmap.erase(var); // mark var as unknown
-          }
+        Value *val = in->getOperand(i);
+        ValueState vs = getVS(vmap, val);
+        if (DEBUG) errs() << "   adf: -> complex use of do_function argument " << *in << "\n";
+        switch(vs.kind) {
+          case VSK_CALL: res.complexUseOfCall = true; break;
+          case VSK_OP: res.complexUseOfOp = true; break;
+          case VSK_ENV: res.complexUseOfEnv = true; break;
+          case VSK_ARGS:
+            switch(vs.akind) {
+              // FIXME: I am in fact not detecting changes of the arg list
+              case AVK_HEADER:
+              case AVK_CDR:
+                res.complexUseOfArgs = true; break;
+              case AVK_TAG:
+                res.usesTags = true; break;
+            }
+            break;
+        }
+        if (vs.kind != VSK_UNKNOWN) {
+          vmap.erase(val); // mark var as unknown
         }
       }
       // leave vmap[in] as unknown
