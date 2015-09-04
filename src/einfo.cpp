@@ -10,6 +10,7 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/SourceMgr.h>
 
+#include <unordered_set>
 #include <vector>
 
 using namespace llvm;
@@ -217,14 +218,18 @@ int main(int argc, char* argv[]) {
     
   if (1) {
 
-    // NOTE: some functions will be analyzed multiple times, because they are multiple 
-    // times in the function table
+    typedef std::unordered_set<Function*> FunctionSetTy;
+    FunctionSetTy analyzed;
     
     for(FunctionTableTy::iterator fi = funtab.begin(), fe = funtab.end(); fi != fe; ++fi) {
       FunctionEntry& e = *fi;
       Function *fun = e.fun;
       
-      errs() << analyzeDoFunction(fun).str() << "\n"; 
+      auto fsearch = analyzed.find(fun);
+      if (fsearch == analyzed.end()) {
+        analyzed.insert(fun);
+        errs() << analyzeDoFunction(fun).str() << "\n"; 
+      }
     }
   }
 
