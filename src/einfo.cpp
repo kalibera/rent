@@ -184,6 +184,19 @@ void dumpFunctionTable(FunctionTableTy& funtab) {
   dumpFunctions(funtab, "primitive specials", false, true, false, true);
 }
 
+int maxArity(Function* fun, FunctionTableTy& funtab) {
+
+  int res = -1;
+  for(FunctionTableTy::iterator fi = funtab.begin(), fe = funtab.end(); fi != fe; ++fi) {
+    FunctionEntry& e = *fi;
+
+    if (e.fun == fun && e.arity > res) {
+      res = e.arity;
+    }
+  }
+  return res;
+}
+
 int main(int argc, char* argv[]) {
 
   LLVMContext context;
@@ -213,7 +226,7 @@ int main(int argc, char* argv[]) {
   }
   
   if (0) {
-    errs() << analyzeDoFunction(m->getFunction("do_if")).str() << "\n";
+    errs() << analyzeDoFunction(m->getFunction("do_return")).str() << "\n";
   }
     
   if (1) {
@@ -228,7 +241,26 @@ int main(int argc, char* argv[]) {
       auto fsearch = analyzed.find(fun);
       if (fsearch == analyzed.end()) {
         analyzed.insert(fun);
-        errs() << analyzeDoFunction(fun).str() << "\n"; 
+        DoFunctionInfo nfo = analyzeDoFunction(fun);
+
+        int nominalArity = maxArity(fun, funtab);
+        
+        if (0) {
+          if (nominalArity != -1 && nominalArity < nfo.effectiveArity && !nfo.complexUseOfArgs) {
+            // possible error in function table
+          
+            outs() << "ERROR: function " << fun->getName() << " has nominal arity " << std::to_string(nominalArity) <<
+              " but effective arity " << std::to_string(nfo.effectiveArity) << " (" << nfo.str() << ")\n";
+
+          } else if (nfo.effectiveArity < nominalArity && !nfo.complexUseOfArgs) {
+            // error in function table or unused arguments
+
+            outs() << "WARNING: function " << fun->getName() << " has nominal arity " << std::to_string(nominalArity) <<
+              " but effective arity " << std::to_string(nfo.effectiveArity) << " (" << nfo.str() << ")\n";
+          }
+        }
+        
+        errs() << nfo.str() << "\n"; 
       }
     }
   }

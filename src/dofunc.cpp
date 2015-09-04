@@ -8,6 +8,7 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instruction.h>
+#include <llvm/IR/Module.h>
 
 #include <llvm/Support/raw_ostream.h>
 
@@ -357,6 +358,9 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
 
   unsigned maxStatesPerBlock = 20; // FIXME: make this depend on expected arity (or arity specified in FunTab)
 
+  GlobalVariable *nilValue = fun->getParent()->getGlobalVariable("R_NilValue", true);
+  assert(nilValue != NULL);
+
   // FIXME: verify it is a do_XXX function
   
   BlocksVectorTy workList;
@@ -391,7 +395,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
   res.checkArityCalled = true; // this has a rather iffy semantics
   res.usesTags = false;
   res.computesArgsLength = false;
-  res.effectiveArity = -1;
+  res.effectiveArity = 0;
   res.complexUseOfOp = false;
   res.complexUseOfArgs = false;
   res.complexUseOfCall = false;
@@ -457,7 +461,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
           ValueState vs = getVS(vmap, cs.getArgument(0));
           if (vs.kind == VSK_ARGS && vs.akind == AVK_HEADER) {
             res.computesArgsLength = true;
-            if (DEBUG) errs() << "   adf: -> computesArgsLength " << *in << "\n";  
+            if (DEBUG) errs() << "   adf: -> computesArgsLength " << *in << "\n";
             continue;
           }
         }
@@ -603,12 +607,36 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
         continue;
       } // handled store
       
+      if (CmpInst* ci = dyn_cast<CmpInst>(in)) {
+
+        LoadInst *l1 = dyn_cast<LoadInst>(ci->getOperand(0));
+        LoadInst *l2 = dyn_cast<LoadInst>(ci->getOperand(1));
+        
+        if (l1 && l2) {
+          Value *arg = NULL;
+          if (l1->getPointerOperand() == nilValue) {
+            arg = ci->getOperand(1);
+          } else if (l2->getPointerOperand() == nilValue) {
+            arg = ci->getOperand(0);
+          }
+        
+          if (arg) {
+            ValueState vs = getVS(vmap, arg);
+            if (vs.kind == VSK_ARGS && vs.akind == AVK_HEADER) {
+              res.computesArgsLength = true;
+              if (DEBUG) errs() << "   adf: -> computesArgsLength " << *in << "\n";
+              continue;
+            }
+          }
+        }
+      } // handled compare
+      
       // detect when address of a variable is taken (and all other unsupported uses)
       unsigned nops = in->getNumOperands();
       for(unsigned i = 0; i < nops; i++) {
         Value *val = in->getOperand(i);
         ValueState vs = getVS(vmap, val);
-        if (DEBUG) errs() << "   adf: -> complex use of do_function argument " << *in << "\n";
+        if (DEBUG && vs.kind != VSK_UNKNOWN) errs() << "   adf: -> complex use of do_function argument " << *in << "\n";
         switch(vs.kind) {
           case VSK_CALL: res.complexUseOfCall = true; break;
           case VSK_OP: res.complexUseOfOp = true; break;
