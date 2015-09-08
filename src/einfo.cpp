@@ -10,6 +10,7 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/SourceMgr.h>
 
+#include <set>
 #include <unordered_set>
 #include <vector>
 
@@ -197,6 +198,49 @@ int maxArity(Function* fun, FunctionTableTy& funtab) {
   return res;
 }
 
+typedef std::set<int> IntSetTy;
+IntSetTy arities;
+
+IntSetTy uniqueFunctionArities(Function *fun, FunctionTableTy& funtab) {
+  IntSetTy arities;
+  
+  for(FunctionTableTy::iterator fi = funtab.begin(), fe = funtab.end(); fi != fe; ++fi) {
+    FunctionEntry& e = *fi;
+    
+    if (e.fun == fun) {
+      arities.insert(e.arity);
+    }
+  }  
+  return arities;
+}
+
+std::string dumpFunctionArities(IntSetTy arities, int effectiveArity) {
+
+  assert(arities.size() > 0);
+  if (arities.size() == 1) {
+    int a = *arities.begin();
+    if (a != effectiveArity) {
+      return "[!" + std::to_string(a) + "]";
+    } else {
+      return "[" + std::to_string(a) + "]"; // perhaps could omit this output
+    }
+  }
+
+  std::string res = "[";
+  bool first = true;
+  
+  for(IntSetTy::iterator ai = arities.begin(), ae = arities.end(); ai != ae; ++ai) {
+    int a = *ai;
+    if (first) {
+      first = false;
+    } else {
+      res += ",";
+    }
+    res += std::to_string(a);    
+  }
+  return res + "]";
+}
+
 int main(int argc, char* argv[]) {
 
   LLVMContext context;
@@ -260,7 +304,8 @@ int main(int argc, char* argv[]) {
           }
         }
         
-        errs() << nfo.str() << "\n"; 
+        errs() << nfo.str() << " " << dumpFunctionArities(uniqueFunctionArities(fun, funtab), nfo.effectiveArity) << 
+          (e.isSpecial() ? " SPECIAL" : " BUILTIN") << "\n"; 
       }
     }
   }
