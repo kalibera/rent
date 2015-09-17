@@ -188,19 +188,14 @@ public:
   bool VisitDecl(Decl *d) {
 
     // load declarations needed to parse list accesses
+    // NOTE: child nodes are visited after the parent nodes of the AST tree
     
     if (FieldDecl *fd = dyn_cast<FieldDecl>(d)) {
-    
-      
+
       if (fd->getNameAsString() == "listsxp" && fd->getParent()->isUnion() && fd->getParent()->getNameAsString() == "") {
-          
-        // TODO: field type
-          
         RecordDecl *ud = fd->getParent();
        
         if (RecordDecl *up = dyn_cast<RecordDecl>(ud->getParent())) {
-        llvm::errs() << "CHK1: up == sexpRecDecl " << std::to_string(up == sexpRecDecl) << "\n";
-        llvm::errs() << "CHK2: isa<ElaboratedType>(fd->getType()) " << isa<ElaboratedType>(fd->getType()) << "\n";
           if (up == sexpRecDecl && isa<ElaboratedType>(fd->getType())) {
 
             const ElaboratedType *et = dyn_cast<ElaboratedType>(fd->getType());
@@ -213,17 +208,31 @@ public:
         
        
                 sexpRecListSxpFieldDecl = fd;
-                if (DEBUG) llvm::errs() << "Detected declaration of listsxp field in SEXPREC.\n"; 
+                if (DEBUG) llvm::errs() << "Detected listsxp field in SEXPREC.\n"; 
               }
             }
           }
         }
       }
-    
+      
+      // NOTE: not checking type of fields
+      if (fd->getNameAsString() == "carval" && fd->getParent() == listSxpDecl) {
+        listSxpCarFieldDecl = fd;
+        if (DEBUG) llvm::errs() << "Detected car field in listsxp.\n";      
+      }
+
+      if (fd->getNameAsString() == "cdrval" && fd->getParent() == listSxpDecl) {
+        listSxpCdrFieldDecl = fd;
+        if (DEBUG) llvm::errs() << "Detected cdr field in listsxp.\n";      
+      }
+
+      if (fd->getNameAsString() == "tagval" && fd->getParent() == listSxpDecl) {
+        listSxpTagFieldDecl = fd;
+        if (DEBUG) llvm::errs() << "Detected tag field in listsxp.\n";      
+      }
     }
+
     if (RecordDecl *rd = dyn_cast<RecordDecl>(d)) {
-          llvm::errs() << "DBG: declaration record 1:\n";
-          rd->dump();    
     
       if (rd->getParentFunctionOrMethod() == NULL && rd->isCompleteDefinition() && rd->getLexicalParent()->isTranslationUnit() &&
         rd->getNameAsString() == "SEXPREC" && rd->isStruct()) {
@@ -240,27 +249,6 @@ public:
         if (DEBUG) llvm::errs() << "Detected declaration of listsxp_struct.\n";
         return true;
       }      
-      
-      /*
-      if (rd->isUnion() && rd->getParent() == sexpRecDecl && 
-          llvm::errs() << "DBG: declaration record 2:\n";
-          llvm::errs() << "DBG: name " << rd->getNameAsString() << "\n";
-          llvm::errs() << "DBG: parent " << rd->getLexicalParent() << "\n";
-          llvm::errs() << "DBG: decl context isTranslationUnit " << rd->isTranslationUnit() << "\n";
-          llvm::errs() << "DBG: lexical parent decl context isTranslationUnit " << rd->getLexicalParent()->isTranslationUnit() << "\n";          
-          llvm::errs() << "DBG: decl context\n";
-          rd->dumpDeclContext();
-          llvm::errs() << "DBG: parent decl context\n";
-          rd->getLexicalParent()->dumpDeclContext();
-          llvm::errs() << "DBG: record dump\n";
-          rd->dump();
-      
-        if (rd->isStruct() && rd->getNameAsString() == "SEXPREC") {
-          llvm::errs() << "DBG: declaration record 3:\n";
-          rd->dump();
-        }
-      }
-      */
     }
   
     if (!inDoFunction) {
@@ -328,6 +316,9 @@ private:
   // |-FieldDecl 0x1a6b650 <line:222:5, col:21> col:21 cdrval 'struct SEXPREC *'
   // `-FieldDecl 0x1a6b6c0 <line:223:5, col:21> col:21 tagval 'struct SEXPREC *
   RecordDecl *listSxpDecl = NULL;
+  FieldDecl *listSxpCarFieldDecl = NULL;
+  FieldDecl *listSxpCdrFieldDecl = NULL;
+  FieldDecl *listSxpTagFieldDecl = NULL;
 
   // RecordDecl 0x1a6bd10 prev 0x1a6b280 <../../src/include/Rinternals.h:265:9, line:275:1> line:265:16 struct SEXPREC definition <======= sexpRecDecl
   // |-FieldDecl 0x1a6bde0 <line:259:5, col:27> col:27 sxpinfo 'struct sxpinfo_struct':'struct sxpinfo_struct'
