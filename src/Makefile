@@ -30,21 +30,49 @@ CPPFLAGS := $(shell $(LLVMC) --cppflags)
 CXXFLAGS := $(shell $(LLVMC) --cxxflags) -O3 -g3 -MMD
 #CXXFLAGS := $(shell $(LLVMC) --cxxflags) -O0 -g3 -MMD
 
+CLANG_LIBS := \
+	-Wl,--start-group \
+	-lclangAST \
+	-lclangAnalysis \
+	-lclangBasic \
+	-lclangDriver \
+	-lclangEdit \
+	-lclangFrontend \
+	-lclangFrontendTool \
+	-lclangLex \
+	-lclangParse \
+	-lclangSema \
+	-lclangEdit \
+	-lclangASTMatchers \
+	-lclangRewrite \
+	-lclangRewriteFrontend \
+	-lclangStaticAnalyzerFrontend \
+	-lclangStaticAnalyzerCheckers \
+	-lclangStaticAnalyzerCore \
+	-lclangSerialization \
+	-lclangToolingCore \
+	-lclangTooling \
+	-Wl,--end-group
+
 LDFLAGS := $(shell $(LLVMC) --ldflags)
-LDLIBS := $(shell $(LLVMC) --libs --system-libs) 
+LDLIBS := $(CLANG_LIBS) $(shell $(LLVMC) --libs --system-libs)
 
 LINK.o = $(LINK.cc) # link with C++ compiler by default
 
 SOURCES := $(wildcard *.cpp)
 DEPENDS := $(SOURCES:.cpp=.d)
 OBJECTS := $(SOURCES:.cpp=.o)
-SOBJECTS := $(filter-out %info.o, $(OBJECTS))
+SOBJECTS := $(filter-out %sample.o, $(filter-out %info.o, $(OBJECTS)))
 
-TOOLS := einfo
+TOOLS := einfo tooling_sample arg_patterns_sample
 
 all: $(TOOLS)
 
 einfo: einfo.o $(SOBJECTS)
+
+tooling_sample: tooling_sample.o $(SOBJECTS)
+
+arg_patterns_sample: arg_patterns_sample.o $(SOBJECTS)
 
 clean:
 	rm -f $(OBJECTS) $(DEPENDS) $(TOOLS)
