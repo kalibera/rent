@@ -24,133 +24,6 @@ static llvm::cl::OptionCategory ToolingSampleCategory("Do-functions Args Pattern
 
 const bool DEBUG = true;
 
-Stmt* skipParen(Stmt *s) {
-  if (ParenExpr *p = dyn_cast<ParenExpr>(s)) {
-    return p->getSubExpr();
-  }
-  return s;
-}
-
-
-bool isListFieldAccess(Stmt*& stmt, std::string fieldName) {  // advances stmt
-  Stmt *s = stmt;
-
-  s = skipParen(s);
-  if (MemberExpr *m = dyn_cast<MemberExpr>(s)) {
-
-    if (DEBUG) {
-      llvm::errs() << "DBG: member expr 1\n";
-      m->dump();
-    }
-
-    if (!m->isLValue() || m->isArrow()) {
-      return false;
-    }
-    if (m->getType().getAsString() != "struct SEXPREC *") {
-     return false;
-    }
-
-    if (m->getMemberDecl()->getNameAsString() != fieldName) {
-     return false;
-    }
-
-    s = m->getBase();
-
-  } else {
-    return false;
-  }
-  
-  s = skipParen(s);  
-  if (MemberExpr *m = dyn_cast<MemberExpr>(s)) {
-
-    if (DEBUG) {
-      llvm::errs() << "DBG: member expr 2\n";
-      m->dump();
-    }
-
-    if (!m->isLValue()) {
-      return false;
-    }
-    if (m->getType().getAsString() != "struct listsxp_struct") {
-      return false;
-    }
-    if (m->getMemberDecl()->getNameAsString() != "listsxp") {
-      return false;
-    }
-      // ? isArrow
-
-    s = m->getBase();
-  } else {
-    return false;
-  }
-  
-  s = skipParen(s);
-  if (MemberExpr *m = dyn_cast<MemberExpr>(s)) {
-
-    if (DEBUG) {
-      llvm::errs() << "DBG: member expr 3\n";
-      m->dump();
-    }
-
-    if (DEBUG) {
-      llvm::errs() << "DBG: member expr 31\n";
-      llvm::errs() << "DBG: " << m->getType().getAsString() << "\n";
-      llvm::errs() << "DBG: " << m->getMemberDecl()->getNameAsString() << "\n";
-      llvm::errs() << "DBG: isArrow " << m->isArrow() << "\n";
-      m->dump();
-    }
-
-
-    if (!m->isLValue()) {
-      return false;
-    }
-    if (m->getType().getAsString() != "struct listsxp_struct") {
-      return false;
-    }
-    if (m->getMemberDecl()->getNameAsString() != "listsxp") {
-      return false;
-    }
-      // ? isArrow
-
-    s = m->getBase();
-  } else {
-    return false;
-  }  
-
-  s = skipParen(s);
-  stmt = s;  
-  return true;
-}
-
-// detect list accesses of form CA<ncars>R(CD<ncdrs>R(var))
-//   where ncars > 0 || ncdrs > 0
-bool isListAccess(Stmt *s, unsigned& ncars, unsigned& ncdrs, VarDecl*& var) {
-
-  unsigned _ncars = 0;
-  while (isListFieldAccess(s, "carval")) {
-    _ncars++;
-  }
-  
-  unsigned _ncdrs = 0;
-  while (isListFieldAccess(s, "cdrval")) {
-    _ncdrs++;
-  }
-
-  if (_ncars > 0 && _ncdrs > 0) {
-    if (DeclRefExpr *d = dyn_cast<DeclRefExpr>(s)) {
-      if (VarDecl *v = dyn_cast<VarDecl>(d->getDecl())) {
-    
-        ncars = _ncars;
-        ncdrs = _ncdrs;
-        var = v;
-    
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
 
 // By implementing RecursiveASTVisitor, we can specify which AST nodes
 // we're interested in by overriding relevant methods.
@@ -160,6 +33,107 @@ public:
 
   std::string printLoc(SourceLocation l) {
     return l.printToString(TheRewriter.getSourceMgr());
+  }
+
+  Stmt* skipParen(Stmt *s) {
+    if (ParenExpr *p = dyn_cast<ParenExpr>(s)) {
+      return p->getSubExpr();
+    }
+    return s;
+  }
+
+  bool isListFieldAccess(Stmt*& stmt, FieldDecl *fd) {  // advances stmt
+   
+  //  `-ParenExpr 0x2b48120 <line:390:17, col:39> 'struct SEXPREC *' lvalue   <--------------------------------- the CAR starts here
+  //    `-MemberExpr 0x2b480f0 <col:18, col:33> 'struct SEXPREC *' lvalue .carval 0x29115e0
+  //      `-MemberExpr 0x2b480c0 <col:18, col:25> 'struct listsxp_struct':'struct listsxp_struct' lvalue .listsxp 0x2917db0
+  //        `-MemberExpr 0x2b48090 <col:18, col:23> 'union (anonymous union at ../../src/include/Rinternals.h:267:5)':'union SEXPREC::(anonymous at ../../sr
+  //          `-ImplicitCastExpr 0x2b48078 <col:18, col:20> 'struct SEXPREC *' <LValueToRValue>
+  //            `-ParenExpr 0x2b48058 <col:18, col:20> 'struct SEXPREC *' lvalue
+   
+    Stmt *s = stmt;
+
+    s = skipParen(s);
+    if (MemberExpr *m = dyn_cast<MemberExpr>(s)) {
+
+      if (!m->isLValue() || m->isArrow()) {
+        return false;
+      }
+      if (m->getMemberDecl() != fd) {
+        return false;
+      }
+      s = m->getBase();
+    } else {
+      return false;
+    }
+  
+    s = skipParen(s);  
+    if (MemberExpr *m = dyn_cast<MemberExpr>(s)) {
+
+      if (!m->isLValue() || m->isArrow()) {
+        return false;
+      }
+
+      if (m->getMemberDecl() != sexpRecListSxpFieldDecl) {
+        return false;
+      }
+      s = m->getBase();
+    } else {
+      return false;
+    }
+  
+    s = skipParen(s);
+    if (MemberExpr *m = dyn_cast<MemberExpr>(s)) {
+      if (!m->isLValue() || !m->isArrow()) {
+        return false;
+      }
+      if (m->getMemberDecl() != sexpRecUnionFieldDecl) {
+        return false;
+      }
+      s = m->getBase();
+    } else {
+      return false;
+    }  
+
+    s = skipParen(s);
+    
+    if (ImplicitCastExpr *ic = dyn_cast<ImplicitCastExpr>(s)) {
+      s = ic->getSubExprAsWritten();
+    }
+    
+    s = skipParen(s);
+    stmt = s;  
+    return true;
+  }
+
+  // detect list accesses of form CA<ncars>R(CD<ncdrs>R(var))
+  //   where ncars > 0 || ncdrs > 0
+  bool isListAccess(Stmt *s, unsigned& ncars, unsigned& ncdrs, VarDecl*& var) {
+
+    unsigned _ncars = 0;
+    while (isListFieldAccess(s, listSxpCarFieldDecl)) {
+      _ncars++;
+    }
+      
+    unsigned _ncdrs = 0;
+    while (isListFieldAccess(s, listSxpCdrFieldDecl)) {
+      _ncdrs++;
+    }
+
+    if (_ncars > 0 || _ncdrs > 0) {
+      s->dump();
+      if (DeclRefExpr *d = dyn_cast<DeclRefExpr>(s)) {
+        if (VarDecl *v = dyn_cast<VarDecl>(d->getDecl())) {
+          ncars = _ncars;
+          ncdrs = _ncdrs;
+          var = v;
+    
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   bool VisitStmt(Stmt *s) {
@@ -179,7 +153,7 @@ public:
 
     if (isListAccess(s, ncars, ncdrs, var)) {
       llvm::errs() << "List access to variable \"" << cast<VarDecl>(var)->getNameAsString() << "\" ncars=" << std::to_string(ncars) << " ncdrs=" << 
-        std::to_string(ncdrs) << "\n";
+        std::to_string(ncdrs) << " at " << printLoc(s->getLocStart()) << "\n";
     }
    
     return true;
@@ -218,17 +192,22 @@ public:
       // NOTE: not checking type of fields
       if (fd->getNameAsString() == "carval" && fd->getParent() == listSxpDecl) {
         listSxpCarFieldDecl = fd;
-        if (DEBUG) llvm::errs() << "Detected car field in listsxp.\n";      
+        if (DEBUG) llvm::errs() << "Detected car field in listsxp.\n";
       }
 
       if (fd->getNameAsString() == "cdrval" && fd->getParent() == listSxpDecl) {
         listSxpCdrFieldDecl = fd;
-        if (DEBUG) llvm::errs() << "Detected cdr field in listsxp.\n";      
+        if (DEBUG) llvm::errs() << "Detected cdr field in listsxp.\n";
       }
 
       if (fd->getNameAsString() == "tagval" && fd->getParent() == listSxpDecl) {
         listSxpTagFieldDecl = fd;
-        if (DEBUG) llvm::errs() << "Detected tag field in listsxp.\n";      
+        if (DEBUG) llvm::errs() << "Detected tag field in listsxp.\n";
+      }
+      
+      if (fd->getNameAsString() == "u" && fd->getParent() == sexpRecDecl) {
+        sexpRecUnionFieldDecl = fd;
+        if (DEBUG) llvm::errs() << "Detected u field (union) in SEXPREC.\n";
       }
     }
 
@@ -333,10 +312,12 @@ private:
   // | |-FieldDecl 0x1a71ef0 <line:272:2, col:23> col:23 closxp 'struct closxp_struct':'struct closxp_struct'
   // | `-FieldDecl 0x1a71f90 <line:273:2, col:24> col:24 promsxp 'struct promsxp_struct':'struct promsxp_struct'
   // `-FieldDecl 0x1a72070 <line:267:5, line:274:7> col:7 u 'union (anonymous union at ../../src/include/Rinternals.h:267:5)':'union SEXPREC::(anonymous at ../../src/include/Rintern
-
+  //            <=== sexpRecUnionFieldDecl
+  
   RecordDecl *sexpRecDecl = NULL;
   RecordDecl *sexpRecUnionDecl = NULL;
   FieldDecl *sexpRecListSxpFieldDecl = NULL;
+  FieldDecl *sexpRecUnionFieldDecl = NULL;
 
   ParmVarDecl *argsDecl = NULL; // the "args" argument of the present do_XXX function
   std::string funName;
