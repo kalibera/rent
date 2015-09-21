@@ -6,8 +6,11 @@
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/CallSite.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DebugInfo.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instruction.h>
+#include <llvm/IR/IntrinsicInst.h>
+#include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Module.h>
 
 #include <llvm/Support/raw_ostream.h>
@@ -22,6 +25,7 @@
 using namespace llvm;
 
 const bool DEBUG = false;
+const bool LDEBUG = true;
 
 enum ArgValueState {
 
@@ -167,11 +171,12 @@ struct ValueState {
   ValueStateKind kind;
   ArgValueKind akind;
   int argDepth;
+  ListAccess listAccess;
   
-  ValueState(): kind(VSK_UNKNOWN), akind(AVK_NA), argDepth(-1) {}
+  ValueState(): kind(VSK_UNKNOWN), akind(AVK_NA), argDepth(-1), listAccess() {}
 
   ValueState(ValueStateKind kind, ArgValueKind akind, int argDepth):
-    kind(kind), akind(akind), argDepth(argDepth) {}
+    kind(kind), akind(akind), argDepth(argDepth), listAccess() {}
 
   ValueState(ValueStateKind kind) : ValueState(kind, AVK_NA, -1) {}
   
@@ -186,6 +191,7 @@ struct ValueState {
       kind = VSK_UNKNOWN;
       akind = AVK_NA;
       argDepth = -1;
+      listAccess.markUnknown();
       return true;
     }
     
@@ -339,6 +345,21 @@ struct BlockState_hash {
   }
 };
 
+bool ListAccess_equal::operator() (const ListAccess& lhs, const ListAccess& rhs) const {
+  return lhs.varName == rhs.varName && lhs.isArgsVar == rhs.isArgsVar && lhs.line == rhs.line && lhs.ncdrs == rhs.ncdrs
+    || (!lhs.isUnknown() && !rhs.isUnknown());
+};
+
+size_t ListAccess_hash::operator() (const ListAccess& t) const {
+  size_t res = 0;
+  
+  hash_combine(res, t.line);
+  hash_combine(res, t.ncdrs);
+  // do not include varName and isArgsVar, it would not pay off
+  
+  return res;
+};
+
 typedef std::unordered_set<BlockState, BlockState_hash, BlockState_equal> BlockStatesSetTy; // allow multiple states for a basic block for adaptive merging
 typedef std::unordered_map<BasicBlock*, BlockStatesSetTy> BlockStatesMapTy;
 typedef std::vector<BasicBlock*> BlocksVectorTy; // FIXME: should the worklist have pointers to states?
@@ -353,8 +374,122 @@ ValueState getVS(ValuesMapTy& vmap, Value *v) {
   }
 }
 
+// is value "var" in fact the argument argsArg?
+bool isArgument(Value* var, Argument* argsArg) {
+
+  if (Argument *avar = dyn_cast<Argument>(var)) {
+    return avar == argsArg;
+  }
+  if (AllocaInst *v = dyn_cast<AllocaInst>(var)) {
+
+    // there ought be a simpler way in LLVM, but it seems there is not
+ 
+    const Function *f = v->getParent()->getParent();
+    for(const_inst_iterator ii = inst_begin(*f), ie = inst_end(*f); ii != ie; ++ii) {
+      const Instruction *in = &*ii;
+  
+      MDNode *mnode = NULL;
+      if (const DbgDeclareInst *ddi = dyn_cast<DbgDeclareInst>(in)) {
+        if (ddi->getAddress() == var) {
+          mnode = ddi->getVariable();
+        }
+      } else if (const DbgValueInst *dvi = dyn_cast<DbgValueInst>(in)) {
+        if (dvi->getValue() == var) {
+          mnode = dvi->getVariable();
+        }
+      }
+      if (mnode) {
+      
+        DIVariable lvar(mnode);
+        // FIXME: is this always reliable? Couldn't a value be re-declared?
+        if (lvar.getName() == argsArg->getName() && lvar.isInlinedFnArgument(f)) {
+          return true;
+        }
+      }
+    }
+  }
+  
+  return false;
+}
+
+// empty variable names means the name is unknown
+std::string computeVarName(const Value *var) {
+  if (!var) return "";
+  std::string name = var->getName().str();
+  if (!name.empty()) {
+    return name;
+  }
+
+  if (isa<Argument>(var)) {
+    return name;
+  }
+  
+  if (const AllocaInst *v = dyn_cast<AllocaInst>(var)) {
+    const Function *f = v->getParent()->getParent();
+
+    // there ought be a simpler way in LLVM, but it seems there is not  
+    for(const_inst_iterator ii = inst_begin(*f), ie = inst_end(*f); ii != ie; ++ii) {
+      const Instruction *in = &*ii;
+  
+      if (const DbgDeclareInst *ddi = dyn_cast<DbgDeclareInst>(in)) {
+        if (ddi->getAddress() == v) {
+          DIVariable dvar(ddi->getVariable());
+          return dvar.getName();
+        }
+      } else if (const DbgValueInst *dvi = dyn_cast<DbgValueInst>(in)) {
+        if (dvi->getValue() == v) {
+          DIVariable dvar(dvi->getVariable());
+          return dvar.getName();
+        }
+      }
+    }
+  }
+  
+  return "";
+}
+
+bool getVarName(const Value *var, std::string& name) {
+
+  typedef std::map<const Value*, std::string> VarNamesTy;
+  static VarNamesTy cache;
+  
+  auto vsearch = cache.find(var);
+  std::string n;
+  
+  if (vsearch != cache.end()) {
+    n = vsearch->second;
+  } else {
+    n = computeVarName(var);
+    cache.insert({var, n});
+  }
+
+  if (n.empty()) {
+    return false;
+  }
+    
+  name = n;
+  return true;  
+}
+
+bool getSourceLine(Instruction *inst, unsigned &line) {
+  const DebugLoc& debugLoc = inst->getDebugLoc();
+  
+  if (debugLoc.isUnknown()) {
+    return false;
+  }
+  
+  line = debugLoc.getLine();
+  return true;
+}
+
+unsigned getSourceLine(Instruction *inst) {
+  unsigned line = 0;
+  getSourceLine(inst, line);
+  return line;
+}
+
 // FIXME: should also support integers, integer guards, length of the arg list, related guards on nil value
-DoFunctionInfo analyzeDoFunction(Function *fun) {
+DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses) {
 
   unsigned maxStatesPerBlock = 20; // FIXME: make this depend on expected arity (or arity specified in FunTab)
 
@@ -400,6 +535,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
   res.complexUseOfArgs = false;
   res.complexUseOfCall = false;
   res.complexUseOfEnv = false;
+  res.listAccesses.clear();
   
   if (DEBUG) errs() << "adf: analyzing " << fun->getName() << "\n";
   
@@ -476,7 +612,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
         }
       } // handled call
 
-      if (LoadInst* li = dyn_cast<LoadInst>(in)) { // load of a variable
+      if (LoadInst* li = dyn_cast<LoadInst>(in)) { // load of a variable or through a pointer
         ValueState vs = getVS(vmap, li->getPointerOperand());
         
         if (vs.kind == VSK_ARGS) {
@@ -486,14 +622,59 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
               if (DEBUG) errs() << "   adf: -> TAG load" << *in << "\n";
               break;
             case AVK_CAR:
-              if (vs.argDepth >= 0 && vs.argDepth + 1 > res.effectiveArity) {
+              if (vs.argDepth >= 0 && vs.argDepth + 1 > res.effectiveArity) {  // FIXME: why the condition "vs.argDepth >= 0" ?
                 res.effectiveArity = vs.argDepth + 1;
               }
+              
+              if (resolveListAccesses && !vs.listAccess.isUnknown() && getSourceLine(li) == vs.listAccess.line) {
+                auto asearch = res.listAccesses.find(vs.listAccess);
+                if (asearch == res.listAccesses.end()) {
+                  // the first (only) list access of this kind at the given line
+                  res.listAccesses.insert({vs.listAccess, vs.argDepth});
+                  if (LDEBUG) errs() << "   adf: detected and added list access " << vs.listAccess.str() << " to argument " << std::to_string(vs.argDepth) << "\n";
+                } else {
+
+                  if (asearch->second != vs.argDepth) {
+                    // cannot differentiate list accesses on the same line
+                    res.listAccesses.erase(asearch);
+                    if (LDEBUG) errs() << "   adf: detected and removed duplicate list access " << vs.listAccess.str() << " to argument " << std::to_string(vs.argDepth)  << "\n";
+                  }
+                }
+              }
+              
               if (DEBUG) errs() << "   adf: -> CAR load (effective arity now " << std::to_string(res.effectiveArity)  << ") " << *in << "\n";
               break;
             case AVK_CDR:
               vs.argDepth++; // the default vs.argDepth of -1 becomes 0
               vs.akind = AVK_HEADER;
+              
+              if (resolveListAccesses) {
+              
+                Value *val = li->getPointerOperand();
+                if (isa<AllocaInst>(val) || isa<Argument>(val)) {
+
+                  // start of a possible list access                
+                  vs.listAccess.ncdrs = 0;
+                  vs.listAccess.isArgsVar = isArgument(val, argsArg);
+                  if (!getVarName(val, vs.listAccess.varName) ||
+                    !getSourceLine(li, vs.listAccess.line)) {
+                    
+                    // FIXME: this is slightly iffy as it can miss a duplicate list access on a line
+                    vs.listAccess.markUnknown();
+                  } else {
+                    if (LDEBUG) errs() << "   adf: possible start of list access to variable " << vs.listAccess.varName << " at line " << vs.listAccess.line << "\n";
+                  }
+
+                } else if (!vs.listAccess.isUnknown() && vs.listAccess.line == getSourceLine(li)) {
+                
+                  // internal part of a possible list access
+                  vs.listAccess.ncdrs++;
+                  if (LDEBUG) errs() << "   adf: possible CDR of list access to variable " << vs.listAccess.varName << " at line " << vs.listAccess.line << "\n";
+                } else {
+                  vs.listAccess.markUnknown();
+                }
+              }
+              
               vmap[li] = vs;
               if (DEBUG) errs() << "   adf: -> CDR load (depth now " << std::to_string(vs.argDepth)  << ") " << *in << "\n";
               break;
@@ -503,9 +684,13 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
               break;
           }
           continue;
+          // by default, list accesses are left unknown
         } // handled loading of VSK_ARGS
         
         if (vs.kind != VSK_UNKNOWN) {
+          if (resolveListAccesses) {
+            vs.listAccess.markUnknown();
+          }
           vmap[li] = vs;
           if (DEBUG) errs() << "   adf: -> known value kind load " << *in << "\n";
         }
@@ -521,7 +706,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
             if (vs.kind == VSK_ARGS && vs.akind == AVK_HEADER) {
 
               // handle CAR(x), CDR(x), TAG(x)
-              //   this is implemented through looking forward to user instructions
+              //   this is implemented through looking forward at user instructions
               //   and supporting only certain code patterns
               
               //  %5 = load %struct.SEXPREC** %3, align 8, !dbg !68685 ; [#uses=1 type=%struct.SEXPREC*] [debug line = 754:20]
@@ -588,6 +773,8 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
                 case 2: vs.akind = AVK_TAG; break;
               }
               vmap[gep] = vs; // NOTE: we are here setting state of the GEP, the values in between will stay "unknown"
+                              // NOTE: this also copies the list access state
+
               if (DEBUG) errs() << "   adf: -> CAR/CDR/TAG operation (depth now " << std::to_string(vs.argDepth)  << ") " << *in << "\n";
               continue;      
             }
@@ -599,6 +786,9 @@ DoFunctionInfo analyzeDoFunction(Function *fun) {
         
           ValueState vs = getVS(vmap, si->getValueOperand());
           if (vs.kind != VSK_UNKNOWN) {
+            if (resolveListAccesses) {
+              vs.listAccess.markUnknown();
+            }
             vmap[si] = vs;
             vmap[var] = vs;
             if (DEBUG) errs() << "   adf: -> store operation with known value state " << *in << "\n";
