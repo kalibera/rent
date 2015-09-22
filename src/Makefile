@@ -62,9 +62,10 @@ LINK.o = $(LINK.cc) # link with C++ compiler by default
 SOURCES := $(wildcard *.cpp)
 DEPENDS := $(SOURCES:.cpp=.d)
 OBJECTS := $(SOURCES:.cpp=.o)
-SOBJECTS := $(filter-out %sample.o, $(filter-out %info.o, $(OBJECTS)))
 
-TOOLS := einfo tooling_sample arg_patterns_sample
+SOBJECTS := $(filter-out arewriter.o %sample.o %info.o, $(OBJECTS))
+
+TOOLS := einfo tooling_sample arg_patterns_sample arewriter
 
 all: $(TOOLS)
 
@@ -73,6 +74,8 @@ einfo: einfo.o $(SOBJECTS)
 tooling_sample: tooling_sample.o $(SOBJECTS)
 
 arg_patterns_sample: arg_patterns_sample.o $(SOBJECTS)
+
+arewriter: arewriter.o $(SOBJECTS)
 
 clean:
 	rm -f $(OBJECTS) $(DEPENDS) $(TOOLS)
