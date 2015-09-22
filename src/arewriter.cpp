@@ -23,13 +23,15 @@ using namespace clang;
 using namespace clang::driver;
 using namespace clang::tooling;
 
-static llvm::cl::OptionCategory ToolingSampleCategory("Do-functions Args Patterns Detector");
+static llvm::cl::OptionCategory MyToolCategory("Do-functions rewriter options");
+static cl::opt<std::string> BitcodeFilename("bc", cl::init("R.bin.bc"), cl::desc("Filename of the bitcode file for R binary"), cl::value_desc("filename"),
+  cl::cat(MyToolCategory));
+
+static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
+static cl::extrahelp MoreHelp("\nThe tool rewrites the given C source files of GNU-R, changing (some)\ndo-functions to accept their arguments explicitly, instead of via a linked list.\n");
 
 const bool DEBUG = false;
 const bool DUMP = false;
-
-// By implementing RecursiveASTVisitor, we can specify which AST nodes
-// we're interested in by overriding relevant methods.
 
 typedef std::unordered_set<DeclRefExpr*> KnownAccessesTy;
 
@@ -384,11 +386,8 @@ class MyASTConsumer : public ASTConsumer {
 public:
   MyASTConsumer(Rewriter &R) : Visitor(R) {}
 
-  // declaration.
-  
   bool HandleTopLevelDecl(DeclGroupRef DR) override {
     for (DeclGroupRef::iterator b = DR.begin(), e = DR.end(); b != e; ++b) {
-      // Traverse the declaration using our AST visitor.
       Visitor.TraverseDecl(*b);
       if (DUMP) (*b)->dump();
     }
@@ -420,6 +419,7 @@ public:
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                  StringRef file) override {
     llvm::errs() << "** Creating AST consumer for: " << file << "\n";
+    llvm::errs() << "** bitcode file is " << BitcodeFilename.getValue() << "\n";
     TheRewriter.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
     return llvm::make_unique<MyASTConsumer>(TheRewriter);
   }
@@ -429,7 +429,7 @@ private:
 };
 
 int main(int argc, const char **argv) {
-  CommonOptionsParser op(argc, argv, ToolingSampleCategory);
+  CommonOptionsParser op(argc, argv, MyToolCategory);
   ClangTool Tool(op.getCompilations(), op.getSourcePathList());
 
   // ClangTool::run accepts a FrontendActionFactory, which is then used to
