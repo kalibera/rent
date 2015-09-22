@@ -37,10 +37,10 @@ typedef std::unordered_set<DeclRefExpr*> KnownAccessesTy;
 
 class MyASTVisitor : public RecursiveASTVisitor<MyASTVisitor> {
 public:
-  MyASTVisitor(Rewriter &R) : TheRewriter(R) {}
+  MyASTVisitor(Rewriter &r) : rewriter(r) {}
 
   std::string printLoc(SourceLocation l) {
-    return l.printToString(TheRewriter.getSourceMgr());
+    return l.printToString(rewriter.getSourceMgr());
   }
 
   Stmt* skipParen(Stmt *s) {
@@ -172,7 +172,7 @@ public:
     
     la.varName = var->getNameAsString();
     la.isArgsVar = (var == argsDecl);
-    la.line = TheRewriter.getSourceMgr().getExpansionLineNumber(loc);
+    la.line = rewriter.getSourceMgr().getExpansionLineNumber(loc);
     la.ncdrs = ncdrs;
     
     return true;
@@ -340,7 +340,7 @@ public:
   }
 
 private:
-  Rewriter &TheRewriter;
+  Rewriter &rewriter;
 
   // RecordDecl 0x1a6b510 <../../src/include/Rinternals.h:220:1, line:224:1> line:220:8 struct listsxp_struct definition
   // |-FieldDecl 0x1a6b5e0 <line:221:5, col:21> col:21 carval 'struct SEXPREC *'
@@ -384,23 +384,23 @@ private:
 // by the Clang parser.
 class MyASTConsumer : public ASTConsumer {
 public:
-  MyASTConsumer(Rewriter &R) : Visitor(R) {}
+  MyASTConsumer(Rewriter &r) : visitor(r) {}
 
-  bool HandleTopLevelDecl(DeclGroupRef DR) override {
-    for (DeclGroupRef::iterator b = DR.begin(), e = DR.end(); b != e; ++b) {
-      Visitor.TraverseDecl(*b);
-      if (DUMP) (*b)->dump();
+  bool HandleTopLevelDecl(DeclGroupRef dr) override {
+    for (DeclGroupRef::iterator di = dr.begin(), de = dr.end(); di != de; ++di) {
+      visitor.TraverseDecl(*di);
+      if (DUMP) (*di)->dump();
     }
     return true;
   }
 
 /*  
    virtual void HandleTranslationUnit(clang::ASTContext &Context) {
-     Visitor.TraverseDecl(Context.getTranslationUnitDecl());
+     visitor.TraverseDecl(Context.getTranslationUnitDecl());
    }
 */
 private:
-  MyASTVisitor Visitor;
+  MyASTVisitor visitor;
 };
 
 // For each source file provided to the tool, a new FrontendAction is created.
@@ -408,24 +408,24 @@ class MyFrontendAction : public ASTFrontendAction {
 public:
   MyFrontendAction() {}
   void EndSourceFileAction() override {
-    SourceManager &SM = TheRewriter.getSourceMgr();
+    SourceManager &sm = rewriter.getSourceMgr();
     llvm::errs() << "** EndSourceFileAction for: "
-                 << SM.getFileEntryForID(SM.getMainFileID())->getName() << "\n";
+                 << sm.getFileEntryForID(sm.getMainFileID())->getName() << "\n";
 
     // Now emit the rewritten buffer.
-    TheRewriter.getEditBuffer(SM.getMainFileID()).write(llvm::outs());
+    rewriter.getEditBuffer(sm.getMainFileID()).write(llvm::outs());
   }
 
-  std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
+  std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci,
                                                  StringRef file) override {
     llvm::errs() << "** Creating AST consumer for: " << file << "\n";
     llvm::errs() << "** bitcode file is " << BitcodeFilename.getValue() << "\n";
-    TheRewriter.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
-    return llvm::make_unique<MyASTConsumer>(TheRewriter);
+    rewriter.setSourceMgr(ci.getSourceManager(), ci.getLangOpts());
+    return llvm::make_unique<MyASTConsumer>(rewriter);
   }
 
 private:
-  Rewriter TheRewriter;
+  Rewriter rewriter;
 };
 
 int main(int argc, const char **argv) {
