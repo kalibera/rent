@@ -58,4 +58,6 @@ int maxArity(Function* fun, FunctionTableTy& funtab);
 IntSetTy uniqueFunctionArities(Function *fun, FunctionTableTy& funtab);
 std::string dumpFunctionArities(IntSetTy arities, int effectiveArity);
 
+bool isDoFunction(Function *fun, FunctionTableTy& funtab); // linear search
+
 #endif

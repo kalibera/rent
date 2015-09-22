@@ -170,3 +170,17 @@ std::string dumpFunctionArities(IntSetTy arities, int effectiveArity) {
   }
   return res + "]";
 }
+
+bool isDoFunction(Function *fun, FunctionTableTy& funtab) {
+
+  for(FunctionTableTy::iterator fi = funtab.begin(), fe = funtab.end(); fi != fe; ++fi) {
+    FunctionEntry& e = *fi;
+    Function *fun = e.fun;
+    
+    if (e.fun == fun) {
+      return true;
+    }
+  }
+  
+  return false;
+}

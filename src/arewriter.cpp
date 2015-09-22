@@ -6,6 +6,11 @@
 #include <string>
 #include <unordered_set>
 
+#include <llvm/IR/Function.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IRReader/IRReader.h>
+
 #include "clang/AST/AST.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/RecursiveASTVisitor.h"
@@ -18,6 +23,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include "dofunc.h"
+#include "ftable.h"
 
 using namespace clang;
 using namespace clang::driver;
@@ -26,12 +32,80 @@ using namespace clang::tooling;
 static llvm::cl::OptionCategory MyToolCategory("Do-functions rewriter options");
 static cl::opt<std::string> BitcodeFilename("bc", cl::init("R.bin.bc"), cl::desc("Filename of the bitcode file for R binary"), cl::value_desc("filename"),
   cl::cat(MyToolCategory));
+static cl::opt<bool> VerboseOption("v", cl::init(false), cl::desc("Verbose output."), cl::value_desc("verbose"), cl::cat(MyToolCategory));
 
 static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 static cl::extrahelp MoreHelp("\nThe tool rewrites the given C source files of GNU-R, changing (some)\ndo-functions to accept their arguments explicitly, instead of via a linked list.\n");
 
 const bool DEBUG = false;
 const bool DUMP = false;
+
+struct IRAnalyzer {
+
+  llvm::LLVMContext context;
+  FunctionTableTy funtab;
+  llvm::Module *m;
+  
+  public:
+    IRAnalyzer(std::string bcFName) {
+      llvm::SMDiagnostic error;
+      m = parseIRFile(bcFName, error, context).release();
+
+      if (!m) {
+        llvm::errs() << "ERROR: Cannot read IR file " << bcFName << "\n";
+        error.print("arewriter", llvm::errs());
+        exit(2);
+      }
+  
+      if (!readFunctionTable(m, funtab)) {
+        llvm::errs() << "Could not read function table.\n";
+        exit(2);
+      }
+    }
+    
+    ~IRAnalyzer() {
+      delete m;
+    }
+};
+
+// get resolved list accesses for a simple do-function
+//   returns false if the function is not a do function or is not simple
+//   simple implies fixed number of arguments and all accesses resolved
+
+bool getDoFunctionInfo(std::string funName, ResolvedListAccessesTy &listAccesses, unsigned &arity) {
+
+  static IRAnalyzer ir(BitcodeFilename.getValue());
+
+  llvm::Function *fun = ir.m->getFunction(funName);
+  if (!fun) {
+    if (DEBUG) llvm::errs() << "Cannot find function " << funName << " in module " << BitcodeFilename.getValue() << "\n";
+    return false;
+  }
+  
+  if (!isDoFunction(fun, ir.funtab)) {
+    if (VerboseOption.getValue() || DEBUG) llvm::errs() << "Not analyzing function " << funName << " which is not a do_function\n";
+    return false;
+  }
+  
+  unsigned a = maxArity(fun, ir.funtab);
+  
+  DoFunctionInfo nfo = analyzeDoFunction(fun);
+  if (nfo.usesTags || nfo.computesArgsLength || nfo.complexUseOfArgs || 
+    nfo.complexUseOfOp || nfo.complexUseOfCall || nfo.complexUseOfEnv /* FIXME: these could perhaps be allowed? */ ||
+    !nfo.checkArityCalled || nfo.effectiveArity < 0 || a != nfo.effectiveArity) {
+    
+    if (VerboseOption.getValue() || DEBUG) llvm::errs() << "Not analyzing function " << funName << " which is not simple: " << nfo.str() << 
+      " (nominal arity " << std::to_string(a) << ")\n";
+    return false;
+  }
+  
+  arity = a;
+  listAccesses = nfo.listAccesses;
+  if (VerboseOption.getValue()) llvm::errs() << "Analyzing function " << funName << "\n";
+  return true;
+}
+
+
 
 typedef std::unordered_set<DeclRefExpr*> KnownAccessesTy;
 
@@ -179,6 +253,10 @@ public:
   }
 
   bool VisitStmt(Stmt *s) {
+
+    if (!inDoFunction) {
+      return true;
+    }
   
     if (BinaryOperator *bo = dyn_cast<BinaryOperator>(s)) {
       if (bo->isAssignmentOp()) {
@@ -190,7 +268,7 @@ public:
       }
     }
     
-    if (0) {
+   /*
       unsigned ncars, ncdrs;
       VarDecl *var;
       SourceLocation loc;
@@ -199,11 +277,11 @@ public:
         llvm::errs() << "List access to variable \"" << cast<VarDecl>(var)->getNameAsString() << "\" ncars=" << std::to_string(ncars) << " ncdrs=" << 
           std::to_string(ncdrs) << " at " << printLoc(s->getLocStart()) << "\n";
       }
-    }
+    */
     
     ListAccess la;
     if (isListAccess(s, la)) {
-      llvm::errs() << "Detected list access " << la.str() << "\n";
+      llvm::errs() << "Detected list access " << la.str() << " in function " << funName << "\n";
     }
    
     return true;
@@ -307,21 +385,13 @@ public:
     
     Stmt *FuncBody = f->getBody();
 
-    // TODO: perhaps easier to simply check by function name
-
     unsigned nparams = f->param_size();
     if (nparams != 4) {
-     inDoFunction = false;
-     return true;
+      inDoFunction = false;
+      return true;
     }
 
-    funName = f->getNameInfo().getName().getAsString();
-    std::string dopref = "do_";
-    if (funName.substr(0, dopref.length()) != dopref) {
-     inDoFunction = false;
-     return true;
-    }
-    
+    // this check is not necessary as do_functions are detected at IR level
     for(unsigned i = 0; i < nparams; i++) {
       ParmVarDecl *p = f->getParamDecl(i);
       QualType t = p->getTypeSourceInfo()->getType();
@@ -331,10 +401,19 @@ public:
       }
     }
 
-    argsDecl = f->getParamDecl(2);
-    llvm::errs() << "Function " << funName << " may be a do_XXX function with args argument \"" << argsDecl->getNameAsString() << "\".\n";
+    ResolvedListAccessesTy listAccesses;
+    unsigned arity;
+    
+    if (!getDoFunctionInfo(f->getNameAsString(), listAccesses, arity)) {
+      inDoFunction = false;
+      return true;
+    }
+
     inDoFunction = true;
+    funName = f->getNameAsString();
+    argsDecl = f->getParamDecl(2);
     knownAccesses.clear();
+    if (DEBUG) llvm::errs() << "Rewriting/analyzing simple function " << funName << "\n";
     
     return true;
   }
@@ -419,7 +498,7 @@ public:
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci,
                                                  StringRef file) override {
     llvm::errs() << "** Creating AST consumer for: " << file << "\n";
-    llvm::errs() << "** bitcode file is " << BitcodeFilename.getValue() << "\n";
+    llvm::errs() << "** Bitcode file is " << BitcodeFilename.getValue() << "\n";
     rewriter.setSourceMgr(ci.getSourceManager(), ci.getLangOpts());
     return llvm::make_unique<MyASTConsumer>(rewriter);
   }
@@ -430,12 +509,12 @@ private:
 
 int main(int argc, const char **argv) {
   CommonOptionsParser op(argc, argv, MyToolCategory);
-  ClangTool Tool(op.getCompilations(), op.getSourcePathList());
+  ClangTool tool(op.getCompilations(), op.getSourcePathList());
 
   // ClangTool::run accepts a FrontendActionFactory, which is then used to
   // create new objects implementing the FrontendAction interface. Here we use
   // the helper newFrontendActionFactory to create a default factory that will
   // return a new MyFrontendAction object every time.
   // To further customize this, we could create our own factory class.
-  return Tool.run(newFrontendActionFactory<MyFrontendAction>().get());
+  return tool.run(newFrontendActionFactory<MyFrontendAction>().get());
 }
