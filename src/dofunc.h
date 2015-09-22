@@ -17,6 +17,8 @@ struct ListAccess {
   unsigned ncdrs;	// number of "D"s in the expression
   
   ListAccess() { markUnknown(); }
+  ListAccess(std::string varName, bool isArgsVar, unsigned line, unsigned ncdrs):
+    varName(varName), isArgsVar(isArgsVar), line(line), ncdrs(ncdrs) {}
   
   bool isUnknown() const { return line == 0; }
 
@@ -36,7 +38,13 @@ struct ListAccess {
     for(unsigned i = 0; i < ncdrs; i++) {
       pref += "D";
     }
-    return pref + "R(" + varName + suff;
+    pref += "R(";
+    
+    if (isArgsVar) {
+      pref += "<";
+      suff = ">" + suff;
+    }
+    return pref + varName + suff;
   }
 };
 

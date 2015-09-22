@@ -4,6 +4,7 @@
 
 #include <sstream>
 #include <string>
+#include <unordered_set>
 
 #include "clang/AST/AST.h"
 #include "clang/AST/ASTConsumer.h"
@@ -16,17 +17,22 @@
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "dofunc.h"
+
 using namespace clang;
 using namespace clang::driver;
 using namespace clang::tooling;
 
 static llvm::cl::OptionCategory ToolingSampleCategory("Do-functions Args Patterns Detector");
 
-const bool DEBUG = true;
-
+const bool DEBUG = false;
+const bool DUMP = false;
 
 // By implementing RecursiveASTVisitor, we can specify which AST nodes
 // we're interested in by overriding relevant methods.
+
+typedef std::unordered_set<DeclRefExpr*> KnownAccessesTy;
+
 class MyASTVisitor : public RecursiveASTVisitor<MyASTVisitor> {
 public:
   MyASTVisitor(Rewriter &R) : TheRewriter(R) {}
@@ -105,10 +111,15 @@ public:
     stmt = s;  
     return true;
   }
-
+  
   // detect list accesses of form CA<ncars>R(CD<ncdrs>R(var))
   //   where ncars > 0 || ncdrs > 0
-  bool isListAccess(Stmt *s, unsigned& ncars, unsigned& ncdrs, VarDecl*& var) {
+  
+  bool isListAccess(Stmt *s, unsigned& ncars, unsigned& ncdrs, VarDecl*& var, SourceLocation& loc) {
+
+      // declaration references (nodes) of already detected list accesses
+      // this is used to avoid multiple detection for the same complex access, e.g.
+      //   with CADR(x), we don't want to detect also CDR(x)
 
     unsigned _ncars = 0;
     while (isListFieldAccess(s, listSxpCarFieldDecl)) {
@@ -121,19 +132,48 @@ public:
     }
 
     if (_ncars > 0 || _ncdrs > 0) {
-      s->dump();
       if (DeclRefExpr *d = dyn_cast<DeclRefExpr>(s)) {
         if (VarDecl *v = dyn_cast<VarDecl>(d->getDecl())) {
-          ncars = _ncars;
-          ncdrs = _ncdrs;
-          var = v;
+
+          auto dsearch = knownAccesses.find(d);
+          if (dsearch == knownAccesses.end()) {
+          
+            knownAccesses.insert(d);
+        
+            ncars = _ncars;
+            ncdrs = _ncdrs;
+            var = v;
+            loc = d->getLocStart();
     
-          return true;
+            return true;
+          }
         }
       }
     }
 
     return false;
+  }
+  
+  bool isListAccess(Stmt *s, ListAccess& la) {
+
+    unsigned ncars, ncdrs;
+    VarDecl* var;
+    SourceLocation loc;
+
+    if (!isListAccess(s, ncars, ncdrs, var, loc)) {
+      return false;
+    }
+    
+    if (ncars != 1) {  // ListAccess only supports CADnR accesses
+      return false;
+    }
+    
+    la.varName = var->getNameAsString();
+    la.isArgsVar = (var == argsDecl);
+    la.line = TheRewriter.getSourceMgr().getExpansionLineNumber(loc);
+    la.ncdrs = ncdrs;
+    
+    return true;
   }
 
   bool VisitStmt(Stmt *s) {
@@ -148,12 +188,20 @@ public:
       }
     }
     
-    unsigned ncars, ncdrs;
-    VarDecl *var;
+    if (0) {
+      unsigned ncars, ncdrs;
+      VarDecl *var;
+      SourceLocation loc;
 
-    if (isListAccess(s, ncars, ncdrs, var)) {
-      llvm::errs() << "List access to variable \"" << cast<VarDecl>(var)->getNameAsString() << "\" ncars=" << std::to_string(ncars) << " ncdrs=" << 
-        std::to_string(ncdrs) << " at " << printLoc(s->getLocStart()) << "\n";
+      if (isListAccess(s, ncars, ncdrs, var, loc)) {
+        llvm::errs() << "List access to variable \"" << cast<VarDecl>(var)->getNameAsString() << "\" ncars=" << std::to_string(ncars) << " ncdrs=" << 
+          std::to_string(ncdrs) << " at " << printLoc(s->getLocStart()) << "\n";
+      }
+    }
+    
+    ListAccess la;
+    if (isListAccess(s, la)) {
+      llvm::errs() << "Detected list access " << la.str() << "\n";
     }
    
     return true;
@@ -284,6 +332,8 @@ public:
     argsDecl = f->getParamDecl(2);
     llvm::errs() << "Function " << funName << " may be a do_XXX function with args argument \"" << argsDecl->getNameAsString() << "\".\n";
     inDoFunction = true;
+    knownAccesses.clear();
+    
     return true;
   }
 
@@ -324,6 +374,8 @@ private:
   
   bool inDoFunction; // FIXME: is this flag needed?
   
+  KnownAccessesTy knownAccesses; // already known list accesses
+  
 };
 
 // Implementation of the ASTConsumer interface for reading an AST produced
@@ -338,7 +390,7 @@ public:
     for (DeclGroupRef::iterator b = DR.begin(), e = DR.end(); b != e; ++b) {
       // Traverse the declaration using our AST visitor.
       Visitor.TraverseDecl(*b);
-      (*b)->dump();
+      if (DUMP) (*b)->dump();
     }
     return true;
   }
