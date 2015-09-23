@@ -105,8 +105,6 @@ bool getDoFunctionInfo(std::string funName, ResolvedListAccessesTy &listAccesses
   return true;
 }
 
-
-
 typedef std::unordered_set<DeclRefExpr*> KnownAccessesTy;
 
 class MyASTVisitor : public RecursiveASTVisitor<MyASTVisitor> {
@@ -415,6 +413,33 @@ public:
     knownAccesses.clear();
     if (DEBUG) llvm::errs() << "Rewriting/analyzing simple function " << funName << "\n";
     
+    if (arity > 0) {
+    
+      // rewrite declaration
+      //   "SEXP args" -> "SEXP arg1, SEXP arg2, SEXP arg3"
+    
+      std::string decl;
+      for(unsigned i = 0; i < arity; i++) { // starting with arg0
+        decl += "SEXP arg" + std::to_string(i + 1);
+        if (i < arity - 1) {
+          decl += ", ";
+        }
+      }
+      rewriter.ReplaceText(argsDecl->getSourceRange(), decl);
+
+    } else {
+    
+      // removing the "args" argument
+      // need to remove the extra comma (args separator)
+      
+      SourceLocation opTokenStartLoc = f->getParamDecl(1)->getLocEnd();
+      SourceLocation commaAfterOpLoc = opTokenStartLoc.getLocWithOffset(rewriter.getRangeSize(SourceRange(opTokenStartLoc, opTokenStartLoc)));
+      
+      SourceLocation argsTokenStartLoc = f->getParamDecl(2)->getLocEnd();
+      SourceLocation commaAfterArgsLoc = argsTokenStartLoc.getLocWithOffset(rewriter.getRangeSize(SourceRange(argsTokenStartLoc, argsTokenStartLoc)));      
+
+      rewriter.ReplaceText(SourceRange(commaAfterOpLoc, commaAfterArgsLoc), ","); // we delete ", SEXP args,"
+    }
     return true;
   }
 
