@@ -87,7 +87,7 @@ bool getDoFunctionInfo(std::string funName, ResolvedListAccessesTy &listAccesses
     return false;
   }
   
-  unsigned a = maxArity(fun, ir.funtab);
+  int a = maxArity(fun, ir.funtab);
   
   DoFunctionInfo nfo = analyzeDoFunction(fun);
   if (nfo.usesTags || nfo.computesArgsLength || nfo.complexUseOfArgs || 
