@@ -38,7 +38,7 @@ static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 static cl::extrahelp MoreHelp("\nThe tool rewrites the given C source files of GNU-R, changing (some)\ndo-functions to accept their arguments explicitly, instead of via a linked list.\n");
 
 const bool DEBUG = false;
-const bool DUMP = false;
+const bool DUMP = true;
 
 struct IRAnalyzer {
 
@@ -105,6 +105,59 @@ bool getDoFunctionInfo(std::string funName, ResolvedListAccessesTy &listAccesses
   return true;
 }
 
+// for debugging
+void dumpLocation(SourceManager& sm, SourceLocation loc) {
+
+  llvm::errs() << "  ----- location " << loc.printToString(sm) << "\n";
+  llvm::errs() << "  isMacroID " << std::to_string(loc.isMacroID()) << "\n";
+  llvm::errs() << "  isFileID " << std::to_string(loc.isFileID()) << "\n";
+  llvm::errs() << "  isValid " << std::to_string(loc.isValid()) << "\n";  
+   
+  if (loc.isMacroID()) {
+    
+    llvm::errs() << "  isAtEndOfImmediateMacroExpansion ";
+    SourceLocation end;
+    if (sm.isAtEndOfImmediateMacroExpansion(loc, &end)) {
+      llvm::errs() << end.printToString(sm) << "\n";
+    } else {
+      llvm::errs() << "0\n";
+    }
+    
+    llvm::errs() << "  isAtStartOfImmediateMacroExpansion ";
+    SourceLocation start;
+    if (sm.isAtStartOfImmediateMacroExpansion(loc, &start)) {
+      llvm::errs() << start.printToString(sm) << "\n";
+    } else {
+      llvm::errs() << "0\n";
+    }
+
+    llvm::errs() << "  isMacroBodyExpansion " << std::to_string(sm.isMacroBodyExpansion(loc)) << "\n";
+    llvm::errs() << "  isMacroArgExpansion " << std::to_string(sm.isMacroArgExpansion(loc)) << "\n";
+    
+    llvm::errs() << "  getSpellingLoc " << sm.getSpellingLoc(loc).printToString(sm) << "\n";
+    llvm::errs() << "  getImmediateSpellingLoc " << sm.getImmediateSpellingLoc(loc).printToString(sm) << "\n";
+    llvm::errs() << "  getImmediateMacroCallerLoc " << sm.getImmediateMacroCallerLoc(loc).printToString(sm) << "\n";  
+    llvm::errs() << "  getExpansionLoc " << sm.getExpansionLoc(loc).printToString(sm) << "\n";
+    
+    const SrcMgr::ExpansionInfo& einfo = sm.getSLocEntry(sm.getFileID(loc)).getExpansion();
+    llvm::errs() << "  ExpansionInfo::isMacroArgExpansion " << std::to_string(einfo.isMacroArgExpansion()) << "\n";
+    llvm::errs() << "  ExpansionInfo::isMacroBodyExpansion " << std::to_string(einfo.isMacroBodyExpansion()) << "\n";
+    llvm::errs() << "  ExpansionInfo::isFunctionMacroExpansion " << std::to_string(einfo.isFunctionMacroExpansion()) << "\n";
+    llvm::errs() << "  ExpansionInfo::getSpellingLoc " << einfo.getSpellingLoc().printToString(sm) << "\n";
+    llvm::errs() << "  ExpansionInfo::getExpansionLocStart " << einfo.getExpansionLocStart().printToString(sm) << "\n";
+    llvm::errs() << "  ExpansionInfo::getExpansionLocEnd " << einfo.getExpansionLocEnd().printToString(sm) << "\n";
+    
+    SourceLocation ierStart = sm.getImmediateExpansionRange(loc).first;
+    SourceLocation ierEnd = sm.getImmediateExpansionRange(loc).second;
+    llvm::errs() << "  getImmediateExpansionRange - start " << ierStart.printToString(sm) << "\n";
+    llvm::errs() << "  getImmediateExpansionRange - end " << ierEnd.printToString(sm) << "\n";
+  }
+    
+  if (loc.isFileID()) {  
+    llvm::errs() << "  getMacroArgExpandedLocation " << sm.getMacroArgExpandedLocation(loc).printToString(sm) << "\n";
+  }
+}
+
 typedef std::unordered_set<DeclRefExpr*> KnownAccessesTy;
 
 class MyASTVisitor : public RecursiveASTVisitor<MyASTVisitor> {
@@ -117,11 +170,45 @@ public:
 
   Stmt* skipParen(Stmt *s) {
     if (ParenExpr *p = dyn_cast<ParenExpr>(s)) {
-      return p->getSubExpr();
+      Stmt* res = p->getSubExpr();
+      return res;
     }
     return s;
   }
 
+  void updateEndLoc(Stmt* s, SourceLocation& endLoc) {
+    SourceManager& sm = rewriter.getSourceMgr();
+    SourceLocation loc = s->getLocStart();
+    
+    llvm::errs() << "--- updateEndLoc (to be finished) --- \n";
+    s->dump();
+    llvm::errs() << "  --- LOC START --- \n";
+    dumpLocation(sm, s->getLocStart());
+    llvm::errs() << "  --- LOC END --- \n";
+    dumpLocation(sm, s->getLocEnd());
+
+    llvm::errs() << "  --- START - IMMEDIATE MACRO CALLER LOC --- \n";
+    SourceLocation imc = sm.getImmediateMacroCallerLoc(s->getLocStart());
+    dumpLocation(sm, imc);
+    
+    llvm::errs() << "  --- START - IMMEDIATE MACRO CALLER LOC - IMMEDIATE EXPANSION RANGE END --- \n";
+    SourceLocation imcier = sm.getImmediateExpansionRange(imc).second;
+    dumpLocation(sm, imcier);
+
+    llvm::errs() << "  --- START - IMMEDIATE MACRO CALLER LOC - IMMEDIATE EXPANSION RANGE END - IMMEDIATE EXPANSION RANGE START --- \n";
+    SourceLocation imcieriers = sm.getImmediateExpansionRange(imcier).first;
+    dumpLocation(sm, imcieriers);
+
+
+    llvm::errs() << "  --- START - IMMEDIATE MACRO CALLER LOC - IMMEDIATE EXPANSION RANGE END - IMMEDIATE EXPANSION RANGE END --- \n";
+    SourceLocation imcieriere = sm.getImmediateExpansionRange(imcier).second;
+    dumpLocation(sm, imcieriere);
+
+
+    llvm::errs() << "\n";    
+  }
+  
+  
   bool isListFieldAccess(Stmt*& stmt, FieldDecl *fd) {  // advances stmt
    
   //  `-ParenExpr 0x2b48120 <line:390:17, col:39> 'struct SEXPREC *' lvalue   <--------------------------------- the CAR starts here
@@ -132,8 +219,8 @@ public:
   //            `-ParenExpr 0x2b48058 <col:18, col:20> 'struct SEXPREC *' lvalue
    
     Stmt *s = stmt;
-
     s = skipParen(s);
+    
     if (MemberExpr *m = dyn_cast<MemberExpr>(s)) {
 
       if (!m->isLValue() || m->isArrow()) {
@@ -147,7 +234,7 @@ public:
       return false;
     }
   
-    s = skipParen(s);  
+    s = skipParen(s);
     if (MemberExpr *m = dyn_cast<MemberExpr>(s)) {
 
       if (!m->isLValue() || m->isArrow()) {
@@ -182,12 +269,13 @@ public:
     }
     
     s = skipParen(s);
-    stmt = s;  
+    stmt = s;
     return true;
   }
   
   // detect list accesses of form CA<ncars>R(CD<ncdrs>R(var))
   //   where ncars > 0 || ncdrs > 0
+  //
   
   bool isListAccess(Stmt *s, unsigned& ncars, unsigned& ncdrs, VarDecl*& var, SourceLocation& loc) {
 
@@ -195,6 +283,8 @@ public:
       // this is used to avoid multiple detection for the same complex access, e.g.
       //   with CADR(x), we don't want to detect also CDR(x)
 
+    SourceLocation e = s->getLocStart();
+    
     unsigned _ncars = 0;
     while (isListFieldAccess(s, listSxpCarFieldDecl)) {
       _ncars++;
@@ -249,6 +339,19 @@ public:
     
     return true;
   }
+  
+  // for a list access (detected at AST level), get argument index (based on
+  // analysis done at IR level)
+  unsigned getListAccessArgIndex(ListAccess la) {
+  
+    auto asearch = resolvedListAccesses.find(la);
+    if (asearch == resolvedListAccesses.end()) {
+      llvm::errs() << "ERROR: list access " << la.str() << " detected at AST level was not found at the IR level (or perhaps was ambiguous)\n";
+      exit(3);
+      // FIXME: it would be more robust to abort only rewriting of a single function; is it somehow possible to undo changes?
+    }
+    return asearch->second;
+  }
 
   bool VisitStmt(Stmt *s) {
 
@@ -278,10 +381,45 @@ public:
     */
     
     ListAccess la;
+    SourceLocation endLoc;
+
     if (isListAccess(s, la)) {
-      llvm::errs() << "Detected list access " << la.str() << " in function " << funName << "\n";
+      unsigned ai = getListAccessArgIndex(la);
+      llvm::errs() << "Detected list access " << la.str() << " to argument " << ai << " in function " << funName << "\n";
+      
+      // rewrite argument access 
+      
+      llvm::errs() << "Rewriting..\n";
+
+      SourceManager& sm = rewriter.getSourceMgr(); // FIXME: may the source manager ever change?
+      
+      SourceLocation startLoc = s->getSourceRange().getBegin();
+      SourceLocation imc = sm.getImmediateMacroCallerLoc(startLoc);
+     
+      SourceLocation rewriteBegin, rewriteEnd;
+     
+      if (imc.isMacroID()) { // go from CAR(x) to e.g. CADR(x), CADDR(x), etc
+
+        SourceLocation iere = sm.getImmediateExpansionRange(imc).second;
+        while (iere.isMacroID()) { // go from PROTECT( ... CAR(x) ... ) to CAR(x)
+          imc = iere;
+          iere = sm.getImmediateExpansionRange(imc).second;
+        }
+      } else { // CAR(x)
+        imc = startLoc; 
+      }
+
+      rewriteBegin = sm.getImmediateExpansionRange(imc).first;
+      rewriteEnd = sm.getImmediateExpansionRange(imc).second;
+      
+      
+      rewriter.ReplaceText(SourceRange(rewriteBegin, rewriteEnd), "arg" + std::to_string(ai + 1));
+      
+      llvm::errs() << "Rewritten list access start:" << rewriteBegin.printToString(sm) <<
+          " end: " << rewriteEnd.printToString(sm) << " to arg" << std::to_string(ai + 1) << "\n";
+      
     }
-   
+
     return true;
   }
 
@@ -399,10 +537,9 @@ public:
       }
     }
 
-    ResolvedListAccessesTy listAccesses;
     unsigned arity;
     
-    if (!getDoFunctionInfo(f->getNameAsString(), listAccesses, arity)) {
+    if (!getDoFunctionInfo(f->getNameAsString(), resolvedListAccesses, arity)) {
       inDoFunction = false;
       return true;
     }
@@ -438,7 +575,7 @@ public:
       SourceLocation argsTokenStartLoc = f->getParamDecl(2)->getLocEnd();
       SourceLocation commaAfterArgsLoc = argsTokenStartLoc.getLocWithOffset(rewriter.getRangeSize(SourceRange(argsTokenStartLoc, argsTokenStartLoc)));      
 
-      rewriter.ReplaceText(SourceRange(commaAfterOpLoc, commaAfterArgsLoc), ","); // we delete ", SEXP args,"
+      rewriter.ReplaceText(SourceRange(commaAfterOpLoc, commaAfterArgsLoc), ","); // we delete ", SEXP args,", so we have to add a comma
     }
     return true;
   }
@@ -480,7 +617,9 @@ private:
   
   bool inDoFunction; // FIXME: is this flag needed?
   
-  KnownAccessesTy knownAccesses; // already known list accesses
+  KnownAccessesTy knownAccesses; // already known list accesses (for detection in AST graph)
+  ResolvedListAccessesTy resolvedListAccesses; // list accesses detected and resolved at IR level
+  
   
 };
 
