@@ -364,6 +364,24 @@ public:
         if (DeclRefExpr *dr = dyn_cast<DeclRefExpr>(bo->getLHS())) {
           if (dr->getDecl() == argsDecl) {
             if (DEBUG) llvm::errs() << "Modification of args variable at " << printLoc(bo->getOperatorLoc()) << "\n";
+            
+
+          }
+        }
+      }
+    }
+    
+    if (CallExpr *ce = dyn_cast<CallExpr>(s)) {
+      if (checkArityFunDecl && ce->getDirectCallee() == checkArityFunDecl) {
+        if (ImplicitCastExpr *ic = dyn_cast<ImplicitCastExpr>(ce->getArg(1))) { // check at least the "args" argument of checkArityCall
+          if (DeclRefExpr *dr = dyn_cast<DeclRefExpr>(ic->getSubExpr())) {
+            if (dr->getDecl() == argsDecl) {
+              
+              std::pair<SourceLocation,SourceLocation> ier = rewriter.getSourceMgr().getImmediateExpansionRange(ce->getLocStart());
+              rewriter.RemoveText(SourceRange(ier.first, ier.second));
+              
+              llvm::errs() << "Deleted checkArityCall at " << printLoc(ce->getLocStart()) << "\n";
+            }
           }
         }
       }
@@ -515,8 +533,19 @@ public:
 
     // Only function definitions (with bodies), not declarations.
     if (!f->hasBody()) {
-     inDoFunction = false;
-     return true;
+    
+      if (f->param_size() == 3 && f->getNameAsString() == "Rf_checkArityCall") {
+        checkArityFunDecl = f;
+        // FIXME: could also check it is a toplevel function, could check arguments are SEXP
+        
+        if (DEBUG) {
+          llvm::errs() << "Detected declaration of Rf_checkArityCall\n";
+        }
+      }
+    
+      // FIXME: could detect declaration of checkArityCall function here
+      inDoFunction = false;
+      return true;
     }
     
     Stmt *FuncBody = f->getBody();
@@ -614,6 +643,8 @@ private:
 
   ParmVarDecl *argsDecl = NULL; // the "args" argument of the present do_XXX function
   std::string funName;
+
+  FunctionDecl *checkArityFunDecl = NULL;
   
   bool inDoFunction; // FIXME: is this flag needed?
   
