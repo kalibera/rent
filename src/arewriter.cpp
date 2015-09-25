@@ -377,9 +377,23 @@ public:
           if (DeclRefExpr *dr = dyn_cast<DeclRefExpr>(ic->getSubExpr())) {
             if (dr->getDecl() == argsDecl) {
               
-              std::pair<SourceLocation,SourceLocation> ier = rewriter.getSourceMgr().getImmediateExpansionRange(ce->getLocStart());
+              SourceManager& sm = rewriter.getSourceMgr();
+              std::pair<SourceLocation,SourceLocation> ier = sm.getImmediateExpansionRange(ce->getLocStart());
               rewriter.RemoveText(SourceRange(ier.first, ier.second));
               
+              // delete ";" after the call and whitespaces, if present
+              SourceLocation afterLoc = ier.second.getLocWithOffset(1);
+              if (sm.isWrittenInSameFile(ier.second, afterLoc)) {
+                const char *after = sm.getCharacterData(afterLoc);
+                unsigned i = 0;
+                while(after[i] != 0 && after[i] == ' ' || after[i] == '\t' || after[i] == '\n' || after[i] =='\r') i++;
+                if (after[i] == ';') {
+                  i++;
+                  while(after[i] != 0 && after[i] == ' ' || after[i] == '\t' || after[i] == '\n' || after[i] == '\r') i++;
+                  rewriter.RemoveText(afterLoc, i);
+                }
+              }
+
               llvm::errs() << "Deleted checkArityCall at " << printLoc(ce->getLocStart()) << "\n";
             }
           }
