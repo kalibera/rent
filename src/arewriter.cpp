@@ -37,7 +37,7 @@ static cl::opt<bool> VerboseOption("v", cl::init(false), cl::desc("Verbose outpu
 static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 static cl::extrahelp MoreHelp("\nThe tool rewrites the given C source files of GNU-R, changing (some)\ndo-functions to accept their arguments explicitly, instead of via a linked list.\n");
 
-const bool DEBUG = false;
+const bool DEBUG = true;
 const bool DUMP = true;
 const bool WRAPPERS = true;
 
@@ -343,7 +343,7 @@ public:
   
   // for a list access (detected at AST level), get argument index (based on
   // analysis done at IR level)
-  bool getListAccessArgIndex(ListAccess la, unsigned argIndex) {
+  bool getListAccessArgIndex(ListAccess la, unsigned& argIndex) {
   
     auto asearch = resolvedListAccesses.find(la);
     if (asearch == resolvedListAccesses.end()) {
@@ -435,6 +435,9 @@ public:
 
       SourceManager& sm = rewriter.getSourceMgr(); // FIXME: may the source manager ever change?
       
+/*      
+      // guess 1 - it often works... but not always, e.g. it fails for RAW(CAR(args))
+      
       SourceLocation startLoc = s->getSourceRange().getBegin();
       SourceLocation imc = sm.getImmediateMacroCallerLoc(startLoc);
      
@@ -454,6 +457,24 @@ public:
       rewriteBegin = sm.getImmediateExpansionRange(imc).first;
       rewriteEnd = sm.getImmediateExpansionRange(imc).second;
       
+ */    
+ 
+      
+      SourceLocation loc = s->getSourceRange().getBegin();
+      
+      for(SourceLocation l = loc; l.isMacroID(); l = sm.getImmediateMacroCallerLoc(l)) {
+        loc = l;
+      }
+
+      SourceLocation rewriteBegin = sm.getImmediateExpansionRange(loc).first;
+      SourceLocation rewriteEnd = sm.getImmediateExpansionRange(loc).second;
+      
+      if (DEBUG) {
+       llvm::errs() << "::::getSourceRange().getBegin() dump\n";
+       dumpLocation(sm, s->getSourceRange().getBegin());
+       llvm::errs() << "::::getImmediateMacroCallerLoc(^) dump\n";
+       dumpLocation(sm, sm.getImmediateMacroCallerLoc(s->getSourceRange().getBegin()));
+      }
       
       rewriter.ReplaceText(SourceRange(rewriteBegin, rewriteEnd), "arg" + std::to_string(ai + 1));
       
