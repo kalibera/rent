@@ -39,6 +39,7 @@ static cl::extrahelp MoreHelp("\nThe tool rewrites the given C source files of G
 
 const bool DEBUG = false;
 const bool DUMP = true;
+const bool WRAPPERS = true;
 
 struct IRAnalyzer {
 
@@ -176,6 +177,7 @@ public:
     return s;
   }
 
+/*
   void updateEndLoc(Stmt* s, SourceLocation& endLoc) {
     SourceManager& sm = rewriter.getSourceMgr();
     SourceLocation loc = s->getLocStart();
@@ -199,7 +201,6 @@ public:
     SourceLocation imcieriers = sm.getImmediateExpansionRange(imcier).first;
     dumpLocation(sm, imcieriers);
 
-
     llvm::errs() << "  --- START - IMMEDIATE MACRO CALLER LOC - IMMEDIATE EXPANSION RANGE END - IMMEDIATE EXPANSION RANGE END --- \n";
     SourceLocation imcieriere = sm.getImmediateExpansionRange(imcier).second;
     dumpLocation(sm, imcieriere);
@@ -207,7 +208,7 @@ public:
 
     llvm::errs() << "\n";    
   }
-  
+*/  
   
   bool isListFieldAccess(Stmt*& stmt, FieldDecl *fd) {  // advances stmt
    
@@ -342,15 +343,23 @@ public:
   
   // for a list access (detected at AST level), get argument index (based on
   // analysis done at IR level)
-  unsigned getListAccessArgIndex(ListAccess la) {
+  bool getListAccessArgIndex(ListAccess la, unsigned argIndex) {
   
     auto asearch = resolvedListAccesses.find(la);
     if (asearch == resolvedListAccesses.end()) {
-      llvm::errs() << "ERROR: list access " << la.str() << " detected at AST level was not found at the IR level (or perhaps was ambiguous)\n";
-      exit(3);
-      // FIXME: it would be more robust to abort only rewriting of a single function; is it somehow possible to undo changes?
+      if (la.isArgsVar) {
+        llvm::errs() << "ERROR: list access to args variable " << la.str() << " detected at AST level was not found at the IR level (or perhaps was ambiguous)\n";
+        exit(3);
+        // FIXME: it would be more robust to abort only rewriting of a single function; is it somehow possible to undo changes?
+      }
+      // this is typically when the list access is not to the args variable (directly or indirectly)
+      if (VerboseOption.getValue() || DEBUG) {
+        llvm::errs() << "List access " << la.str() << " detected at AST level was not found at the IR level (or perhaps was ambiguous, or in fact not to args variable), ignoring\n";
+      }
+      return false;
     }
-    return asearch->second;
+    argIndex = asearch->second;
+    return true;
   }
 
   bool VisitStmt(Stmt *s) {
@@ -414,10 +423,11 @@ public:
     
     ListAccess la;
     SourceLocation endLoc;
+    unsigned ai;
+    
+    if (isListAccess(s, la) && getListAccessArgIndex(la, ai)) {
 
-    if (isListAccess(s, la)) {
-      unsigned ai = getListAccessArgIndex(la);
-      llvm::errs() << "Detected list access " << la.str() << " to argument " << ai << " in function " << funName << "\n";
+      llvm::errs() << "Detected and resolved list access " << la.str() << " to argument " << ai << " in function " << funName << "\n";
       
       // rewrite argument access 
       
@@ -533,7 +543,8 @@ public:
     // Detect shadowing of the args argument by a local variable
     // FIXME: this can possibly be removed
     if (isa<VarDecl>(d) && !isa<ParmVarDecl>(d)) {
-      if (cast<VarDecl>(d)->getNameAsString() == argsDecl->getNameAsString()) {
+      VarDecl *vd = dyn_cast<ParmVarDecl>(d);
+      if (vd && vd->getName() != NULL && vd->getNameAsString() == argsDecl->getNameAsString()) {
         llvm::errs() << "Declaration of local variable \"" << cast<VarDecl>(d)->getNameAsString() << "\" which shadows function argument in function \"" << funName << "\"\n";
         inDoFunction = false;
         return true;
@@ -592,6 +603,42 @@ public:
     argsDecl = f->getParamDecl(2);
     knownAccesses.clear();
     if (DEBUG) llvm::errs() << "Rewriting/analyzing simple function " << funName << "\n";
+    
+    if (WRAPPERS) {
+      // rename the function being rewritten
+      //    and create a wrapper for it
+      //
+      
+      // SEXP attribute_hidden do_complex(SEXP call, SEXP op, SEXP args, SEXP rho)
+      // {
+      
+      // make the original function static
+      
+      SourceManager& sm = rewriter.getSourceMgr();
+      rewriter.ReplaceText(SourceRange(f->getSourceRange().getBegin(), f->getLocation()), "static SEXP " + funName + "_earg");
+      
+      // add a wrapper do_ function
+      std::string wrapper;
+      
+      wrapper += "\n\nSEXP attribute_hidden " + funName + "(SEXP call, SEXP op, SEXP args, SEXP env) {\n\n";
+      for(unsigned i = 0; i < arity; i++) {
+        wrapper += "    SEXP arg" + std::to_string(i + 1) + " = CAR(args);";
+        if (i < (arity - 1)) {
+          wrapper += " args = CDR(args);";
+        }
+        wrapper += "\n";
+      }
+      wrapper += "\n    return " + funName + "_earg(call, op";
+      for(unsigned i = 0; i < arity; i++) {
+        wrapper += ", arg" + std::to_string(i + 1);
+      }
+      wrapper += ", env);\n";
+      wrapper += "}";
+      
+      rewriter.InsertText(f->getSourceRange().getEnd().getLocWithOffset(1), wrapper);
+      
+    }
+    
     
     if (arity > 0) {
     
