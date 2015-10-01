@@ -470,13 +470,6 @@ public:
       SourceLocation rewriteBegin = sm.getImmediateExpansionRange(loc).first;
       SourceLocation rewriteEnd = sm.getImmediateExpansionRange(loc).second;
       
-      if (DEBUG) {
-       llvm::errs() << "::::getSourceRange().getBegin() dump\n";
-       dumpLocation(sm, s->getSourceRange().getBegin());
-       llvm::errs() << "::::getImmediateMacroCallerLoc(^) dump\n";
-       dumpLocation(sm, sm.getImmediateMacroCallerLoc(s->getSourceRange().getBegin()));
-      }
-      
       rewriter.ReplaceText(SourceRange(rewriteBegin, rewriteEnd), "arg" + std::to_string(ai + 1));
       
       llvm::errs() << "Rewritten list access start:" << rewriteBegin.printToString(sm) <<
@@ -595,6 +588,18 @@ public:
       return true;
     }
     
+    if (f->param_size() == 3 && f->getNameAsString() == "Rf_checkArityCall") {
+      if (DEBUG) {
+        if (checkArityFunDecl != NULL) {
+          llvm::errs() << "Detected local re-declaration of Rf_checkArityCall\n";
+        } else {
+          llvm::errs() << "Detected local declaration of Rf_checkArityCall\n";
+        }
+      }
+
+      checkArityFunDecl = f;
+    }
+    
     Stmt *FuncBody = f->getBody();
 
     unsigned nparams = f->param_size();
@@ -638,13 +643,6 @@ public:
       
       SourceManager& sm = rewriter.getSourceMgr();
       rewriter.ReplaceText(SourceRange(sm.getFileLoc(f->getSourceRange().getBegin()), sm.getFileLoc(f->getLocation())), "static SEXP " + funName + "_earg");
-      
-      if (DEBUG) {
-        llvm::errs() << "Function declaration source begin\n";
-        dumpLocation(sm, f->getSourceRange().getBegin());
-        llvm::errs() << "Function declaration location\n";
-        dumpLocation(sm, f->getLocation());
-      }
       
       // add a wrapper do_ function
       std::string wrapper;
