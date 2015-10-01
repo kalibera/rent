@@ -113,7 +113,8 @@ void dumpLocation(SourceManager& sm, SourceLocation loc) {
   llvm::errs() << "  isMacroID " << std::to_string(loc.isMacroID()) << "\n";
   llvm::errs() << "  isFileID " << std::to_string(loc.isFileID()) << "\n";
   llvm::errs() << "  isValid " << std::to_string(loc.isValid()) << "\n";  
-   
+  llvm::errs() << "  getFileLoc "  << sm.getFileLoc(loc).printToString(sm) << "\n";
+  
   if (loc.isMacroID()) {
     
     llvm::errs() << "  isAtEndOfImmediateMacroExpansion ";
@@ -636,7 +637,14 @@ public:
       // make the original function static
       
       SourceManager& sm = rewriter.getSourceMgr();
-      rewriter.ReplaceText(SourceRange(f->getSourceRange().getBegin(), f->getLocation()), "static SEXP " + funName + "_earg");
+      rewriter.ReplaceText(SourceRange(sm.getFileLoc(f->getSourceRange().getBegin()), sm.getFileLoc(f->getLocation())), "static SEXP " + funName + "_earg");
+      
+      if (DEBUG) {
+        llvm::errs() << "Function declaration source begin\n";
+        dumpLocation(sm, f->getSourceRange().getBegin());
+        llvm::errs() << "Function declaration location\n";
+        dumpLocation(sm, f->getLocation());
+      }
       
       // add a wrapper do_ function
       std::string wrapper;
