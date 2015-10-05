@@ -25,6 +25,8 @@
 #include "dofunc.h"
 #include "ftable.h"
 
+#include <cctype>
+
 using namespace clang;
 using namespace clang::driver;
 using namespace clang::tooling;
@@ -40,6 +42,7 @@ static cl::extrahelp MoreHelp("\nThe tool rewrites the given C source files of G
 const bool DEBUG = true;
 const bool DUMP = true;
 const bool WRAPPERS = true;
+const bool REMOVE_UNUSED_ARGS = true;
 
 struct IRAnalyzer {
 
@@ -568,6 +571,10 @@ public:
     
     return true;
   }
+  
+  SourceLocation endOfTokenLoc(SourceLocation loc) {
+    return loc.getLocWithOffset(rewriter.getRangeSize(SourceRange(loc, loc)));
+  }
 
   bool VisitFunctionDecl(FunctionDecl *f) {
 
@@ -655,15 +662,23 @@ public:
         }
         wrapper += "\n";
       }
-      wrapper += "\n    return " + funName + "_earg(call, op";
-      for(unsigned i = 0; i < arity; i++) {
-        wrapper += ", arg" + std::to_string(i + 1);
+      wrapper += "\n    return " + funName + "_earg(";
+      if (!REMOVE_UNUSED_ARGS) {
+        wrapper += "call, op";
       }
-      wrapper += ", env);\n";
+      for(unsigned i = 0; i < arity; i++) {
+        if (i > 0 || !REMOVE_UNUSED_ARGS) {
+          wrapper += ", ";
+        }
+        wrapper += "arg" + std::to_string(i + 1);
+      }
+      if (!REMOVE_UNUSED_ARGS) {
+        wrapper += ", env";
+      }
+      wrapper += ");\n";
       wrapper += "}";
       
       rewriter.InsertText(f->getSourceRange().getEnd().getLocWithOffset(1), wrapper);
-      
     }
     
     
@@ -690,10 +705,48 @@ public:
       SourceLocation commaAfterOpLoc = opTokenStartLoc.getLocWithOffset(rewriter.getRangeSize(SourceRange(opTokenStartLoc, opTokenStartLoc)));
       
       SourceLocation argsTokenStartLoc = f->getParamDecl(2)->getLocEnd();
-      SourceLocation commaAfterArgsLoc = argsTokenStartLoc.getLocWithOffset(rewriter.getRangeSize(SourceRange(argsTokenStartLoc, argsTokenStartLoc)));      
+      SourceLocation commaAfterArgsLoc = endOfTokenLoc(argsTokenStartLoc);
 
       rewriter.ReplaceText(SourceRange(commaAfterOpLoc, commaAfterArgsLoc), ","); // we delete ", SEXP args,", so we have to add a comma
     }
+    
+    if (REMOVE_UNUSED_ARGS) {
+      // remove call, op and env arguments if unused
+      //   (currently, we are only rewriting so simple functions that they never use these arguments for anything but
+      //   checkArity, and we remove the checkArity call anyway)
+      
+      ParmVarDecl *callDecl = f->getParamDecl(0);
+      ParmVarDecl *opDecl = f->getParamDecl(1);
+      ParmVarDecl *envDecl = f->getParamDecl(3);
+      
+      if (arity > 0) {
+        // still have "args" argument
+      
+        SourceLocation commaAfterOpLoc = endOfTokenLoc(opDecl->getLocEnd());
+        
+        SourceManager& sm = rewriter.getSourceMgr();
+        unsigned i = 0;
+        const char *after = sm.getCharacterData(commaAfterOpLoc);
+        while (isspace(after[i])) i++;  // skip whitespace, usually the " " in ", SEXP arg"
+        if (after[i] == ',') i++;
+        while (isspace(after[i])) i++;
+        llvm::errs() << "XXX after: X" << after << "X\n";
+        llvm::errs() << "XXX offset " << std::to_string(i) << "\n";
+        
+        //rewriter.RemoveText(SourceRange(callDecl->getLocStart(), commaAfterOpLoc.getLocWithOffset(i))); // remove "call" and "op" arguments
+        rewriter.RemoveText(commaAfterOpLoc, i); // remove ", " in ", SEXP arg"
+        rewriter.RemoveText(SourceRange(callDecl->getLocStart(), opDecl->getLocEnd())); // remove "call, op" arguments
+      
+        SourceLocation commaAfterArgsLoc = endOfTokenLoc(f->getParamDecl(2)->getLocEnd());
+        
+        rewriter.RemoveText(SourceRange(commaAfterArgsLoc, envDecl->getLocEnd())); // removes ", SEXP env" (last argument including the comma before it)
+        
+      } else {
+        // no args argument
+        rewriter.RemoveText(SourceRange(callDecl->getLocStart(), envDecl->getLocEnd())); // removes all arguments
+      }
+    }
+    
     return true;
   }
 
