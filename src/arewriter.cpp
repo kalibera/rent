@@ -730,10 +730,7 @@ public:
         while (isspace(after[i])) i++;  // skip whitespace, usually the " " in ", SEXP arg"
         if (after[i] == ',') i++;
         while (isspace(after[i])) i++;
-        llvm::errs() << "XXX after: X" << after << "X\n";
-        llvm::errs() << "XXX offset " << std::to_string(i) << "\n";
         
-        //rewriter.RemoveText(SourceRange(callDecl->getLocStart(), commaAfterOpLoc.getLocWithOffset(i))); // remove "call" and "op" arguments
         rewriter.RemoveText(commaAfterOpLoc, i); // remove ", " in ", SEXP arg"
         rewriter.RemoveText(SourceRange(callDecl->getLocStart(), opDecl->getLocEnd())); // remove "call, op" arguments
       
