@@ -57,6 +57,7 @@ struct ListAccess_hash {
 };
 
 typedef std::unordered_map<ListAccess, unsigned, ListAccess_hash, ListAccess_equal> ResolvedListAccessesTy;
+typedef std::vector<std::string> ArgNamesTy;
 
 struct DoFunctionInfo {
 
@@ -71,43 +72,16 @@ struct DoFunctionInfo {
   bool complexUseOfEnv;
   
   ResolvedListAccessesTy listAccesses;
+  ArgNamesTy argNames;
   
   Function *fun;
   
   DoFunctionInfo(Function *fun): fun(fun), checkArityCalled(false), effectiveArity(-1), usesTags(true), computesArgsLength(true),
     complexUseOfArgs(true), complexUseOfCall(true), complexUseOfEnv(true), listAccesses()  {}; // conservative defaults
     
-  std::string str() {
-    std::string res = fun->getName();
-    if (complexUseOfCall) {
-      res += " !CALL";
-    }
-    if (complexUseOfOp) {
-      res += " !OP";
-    }
-    if (complexUseOfArgs) {
-      res += " !ARGS";
-    } else {
-      if (checkArityCalled) {
-        res += " +checkArity";
-      }
-      if (usesTags) {
-        res += " !TAGS";
-      }
-      if (effectiveArity > -1) {
-        res += " +" + std::to_string(effectiveArity);
-      }
-      if (computesArgsLength) {
-        res += " !length";
-      }
-    }
-    if (complexUseOfEnv) {
-      res += " !ENV";
-    }
-    return res;
-  }
+  std::string str();
 };
 
-DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses = true);
+DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses = true, bool resolveArgNames = true);
 
 #endif

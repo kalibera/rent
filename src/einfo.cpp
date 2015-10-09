@@ -3,12 +3,14 @@
 #include "ftable.h"
 
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DebugInfo.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Instruction.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IRReader/IRReader.h>
 
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Support/Path.h>
 #include <llvm/Support/SourceMgr.h>
 
 #include <set>
@@ -47,6 +49,58 @@ void check_type(Value *v) {
   #undef CTSTRINGIFY
 }
 
+// FIXME: copied from rchk
+bool sourceLocation(const Instruction *in, std::string& path, unsigned& line) {
+  if (!in) {
+    return false;
+  }
+  const DebugLoc& debugLoc = in->getDebugLoc();
+  
+  if (debugLoc.isUnknown()) {
+    path = "/unknown";
+    line = 0;
+    return false;
+  }
+
+  line = debugLoc.getLine();  
+  
+  DIScope scope(debugLoc.getScope());
+  if (scope) {
+    if (sys::path::is_absolute(scope.getFilename())) {
+      path = scope.getFilename().str();
+    } else {
+      path = scope.getDirectory().str() + "/" + scope.getFilename().str();
+    }
+  }
+  return true;
+}
+
+// FIXME: copied from rchk
+std::string sourceLocation(const Instruction *in) {
+  unsigned line;
+  std::string path;
+  
+  if (!sourceLocation(in, path, line)) {
+    return "<unknown location>";
+  } else {
+    return path + ":" + std::to_string(line);
+  }
+}
+
+// FIXME: copied from rchk
+std::string funLocation(const Function *f) {
+  const Instruction *instWithDI = NULL;
+  for(Function::const_iterator bb = f->begin(), bbe = f->end(); !instWithDI && bb != bbe; ++bb) {
+    for(BasicBlock::const_iterator in = bb->begin(), ine = bb->end(); !instWithDI && in != ine; ++in) {
+      if (!in->getDebugLoc().isUnknown()) {
+        instWithDI = in;
+      }
+    }
+  }
+  return sourceLocation(instWithDI);
+}
+
+
 int main(int argc, char* argv[]) {
 
   LLVMContext context;
@@ -76,9 +130,9 @@ int main(int argc, char* argv[]) {
   }
   
   if (0) {
-    errs() << analyzeDoFunction(m->getFunction("do_return")).str() << "\n";
+    errs() << analyzeDoFunction(m->getFunction("do_RNGkind")).str() << "\n";
   }
-    
+  
   if (1) {
 
     typedef std::unordered_set<Function*> FunctionSetTy;
@@ -91,6 +145,7 @@ int main(int argc, char* argv[]) {
       auto fsearch = analyzed.find(fun);
       if (fsearch == analyzed.end()) {
         analyzed.insert(fun);
+        ArgNamesTy argNames;
         DoFunctionInfo nfo = analyzeDoFunction(fun);
 
         int nominalArity = maxArity(fun, funtab);
@@ -111,7 +166,9 @@ int main(int argc, char* argv[]) {
         }
         
         errs() << nfo.str() << " " << dumpFunctionArities(uniqueFunctionArities(fun, funtab), nfo.effectiveArity) << 
-          (e.isSpecial() ? " SPECIAL" : " BUILTIN") << "\n"; 
+          (e.isSpecial() ? " SPECIAL" : " BUILTIN"); 
+          
+        errs() << " " << funLocation(fun) << "\n";
       }
     }
   }

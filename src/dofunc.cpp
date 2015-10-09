@@ -25,7 +25,8 @@
 using namespace llvm;
 
 const bool DEBUG = false;
-const bool LDEBUG = false;
+const bool LDEBUG = DEBUG || false;
+const bool ANDEBUG = DEBUG || false;
 
 enum ArgValueState {
 
@@ -448,11 +449,10 @@ std::string computeVarName(const Value *var) {
   return "";
 }
 
-bool getVarName(const Value *var, std::string& name) {
+typedef std::map<const Value*, std::string> VarNamesTy;
 
-  typedef std::map<const Value*, std::string> VarNamesTy;
-  static VarNamesTy cache;
-  
+bool getVarName(const Value *var, std::string& name, VarNamesTy& cache) {
+
   auto vsearch = cache.find(var);
   std::string n;
   
@@ -488,8 +488,91 @@ unsigned getSourceLine(Instruction *inst) {
   return line;
 }
 
+typedef std::unordered_map<AllocaInst *, bool> AliasVarsTy;
+typedef std::unordered_set<std::string> StringSetTy;
+
+bool isAliasVariable(AllocaInst *var, StringSetTy& uniqueVarNames, VarNamesTy& varNames) {
+
+  unsigned nStores = 0;
+  for (Value::user_iterator ui = var->user_begin(), ue = var->user_end(); ui != ue; ++ui) {
+    User *u = *ui;
+    
+    if (StoreInst *si = dyn_cast<StoreInst>(u)) {
+      if (var == si->getPointerOperand()) {
+        nStores++;
+        continue;
+      }
+    }
+    
+    if (isa<LoadInst>(u)) {
+      continue;
+    }
+    
+    return false;
+  }
+  
+  if (nStores != 1) {
+    return false;
+  }
+  
+  // an alias also must have a unique name among local variables
+  
+  std::string name;
+  if (!getVarName(var, name, varNames)) {
+    return false;
+  }
+  
+  return uniqueVarNames.find(name) != uniqueVarNames.end();
+}
+
+bool isAliasVariable(AllocaInst *var, AliasVarsTy& cache, StringSetTy& uniqueVarNames, VarNamesTy& varNames) {
+
+  auto vsearch = cache.find(var);
+  if (vsearch != cache.end()) {
+    return vsearch->second;
+  }
+  
+  bool res = isAliasVariable(var, uniqueVarNames, varNames);
+  
+  cache.insert({var, res});
+  return res;
+}
+
+StringSetTy computeUniqueVarNames(Function *fun, VarNamesTy& varNames) {
+
+  typedef std::unordered_map<std::string, unsigned> NameAliasesTy;
+  NameAliasesTy aliases;
+  
+  // for earch variable name, check how many times it is used
+  //   indeed, this may be over-cautiousness, as variable aliases are not too likely
+  for(inst_iterator ii = inst_begin(*fun), ie = inst_end(*fun); ii != ie; ++ii) {
+    Instruction *in = &*ii;
+    if (AllocaInst* var = dyn_cast<AllocaInst>(in)) {
+      std::string name;
+      if (getVarName(var, name, varNames)) {
+        auto asearch = aliases.find(name);
+        if (asearch == aliases.end()) {
+          aliases.insert({name, 1});
+        } else {
+          asearch->second++;
+        }
+      }
+    }
+  }
+  
+  // report names with one use
+  StringSetTy res;
+  for(NameAliasesTy::iterator ni = aliases.begin(), ne = aliases.end(); ni != ne; ++ni) {
+    if (ni->second == 1) {
+      res.insert(ni->first);
+    }
+  }
+  
+  return res;
+}
+
 // FIXME: should also support integers, integer guards, length of the arg list, related guards on nil value
-DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses) {
+DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool resolveArgNames) {
 
   unsigned maxStatesPerBlock = 20; // FIXME: make this depend on expected arity (or arity specified in FunTab)
 
@@ -536,6 +619,20 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses) {
   res.complexUseOfCall = false;
   res.complexUseOfEnv = false;
   res.listAccesses.clear();
+
+  VarNamesTy varNames;   // cache of var names
+  StringSetTy uniqueVarNames;
+  if (resolveArgNames) {
+    uniqueVarNames = computeUniqueVarNames(fun, varNames);
+  }
+  AliasVarsTy aliasVars;
+  
+  typedef std::unordered_map<int, AllocaInst*> ArgumentAliasVarsMapTy;
+    // argument index -> alias variable
+    //   if the argument is stored to multiple alias variables, the alias variable is set to NULL
+    //	 if we don't know yet about any atore to alias variable for an argument, the argument is not in the map
+    
+  ArgumentAliasVarsMapTy argAliasVarMap;
   
   if (DEBUG) errs() << "adf: analyzing " << fun->getName() << "\n";
   
@@ -642,6 +739,33 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses) {
                 }
               }
               
+              if (resolveArgNames) {
+                for(Value::user_iterator ui = li->user_begin(), ue = li->user_end(); ui != ue; ++ui) {
+                  User *u = *ui;
+                  
+                  if (StoreInst *si = dyn_cast<StoreInst>(u)) {
+                    if (AllocaInst *tvar = dyn_cast<AllocaInst>(si->getPointerOperand())) {
+
+                      // the result of the argument access is stored to a local variable
+                      if (isAliasVariable(tvar, aliasVars, uniqueVarNames, varNames)) {
+                      
+                        int argIndex = vs.argDepth;
+                        auto isearch = argAliasVarMap.find(argIndex);
+                        if (isearch == argAliasVarMap.end()) {
+                          argAliasVarMap.insert({argIndex, tvar});
+                          if (ANDEBUG) errs() << "   adf: detected alias variable " << *tvar << " (first) for argument index " << argIndex << "\n";
+                        } else {
+                          if (isearch->second != tvar) {
+                            argAliasVarMap.erase(isearch); // argument stored to multiple alias variables
+                            if (ANDEBUG) errs() << "   adf: detected alias variable " << *tvar << " (duplicate name!) for argument index " << argIndex << "\n";
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+              
               if (DEBUG) errs() << "   adf: -> CAR load (effective arity now " << std::to_string(res.effectiveArity)  << ") " << *in << "\n";
               break;
             case AVK_CDR:
@@ -656,7 +780,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses) {
                   // start of a possible list access                
                   vs.listAccess.ncdrs = 0;
                   vs.listAccess.isArgsVar = isArgument(val, argsArg);
-                  if (!getVarName(val, vs.listAccess.varName) ||
+                  if (!getVarName(val, vs.listAccess.varName, varNames) ||
                     !getSourceLine(li, vs.listAccess.line)) {
                     
                     // FIXME: this is slightly iffy as it can miss a duplicate list access on a line
@@ -896,5 +1020,79 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses) {
       workList.push_back(sbb);
     }
   }
+  
+  // summarize arg names
+  
+  if (resolveArgNames) {
+    unsigned nnames = 0;
+    
+    for(int i = 0; i < res.effectiveArity; i++) {
+      auto asearch = argAliasVarMap.find(i);
+      if (asearch != argAliasVarMap.end()) {
+        AllocaInst *var = asearch->second;
+        if (var != NULL) {
+          std::string name;
+          bool hasName = getVarName(var, name, varNames);
+          assert(hasName);
+        
+          res.argNames.push_back(name);
+          nnames++;
+          continue;
+        }
+      }
+      res.argNames.push_back(std::string()); // empty string for unknown argument name
+    }
+    
+    if (nnames == 0) { // no arg names in fact resolved
+      res.argNames.clear();
+    }
+  }
+  
+  return res;
+}
+
+std::string DoFunctionInfo::str() {
+
+  std::string res = fun->getName();
+  if (complexUseOfCall) {
+    res += " !CALL";
+  }
+  if (complexUseOfOp) {
+    res += " !OP";
+  }
+  if (complexUseOfArgs) {
+    res += " !ARGS";
+  } else {
+    if (checkArityCalled) {
+      res += " +checkArity";
+    }
+    if (usesTags) {
+      res += " !TAGS";
+    }
+    if (effectiveArity > -1) {
+      res += " +" + std::to_string(effectiveArity);
+    }
+    if (computesArgsLength) {
+      res += " !length";
+    }
+  }
+  if (complexUseOfEnv) {
+    res += " !ENV";
+  }
+    
+  if (!complexUseOfArgs && effectiveArity > 0 && !argNames.empty()) {
+    res += " <";
+    bool first = true;
+    for(ArgNamesTy::iterator ni = argNames.begin(), ne = argNames.end(); ni != ne; ++ni) {
+
+      if (!first) {
+        res += ",";
+      }
+      first = false;
+      res += *ni;          
+    }
+    res += ">";
+  }
+
   return res;
 }
