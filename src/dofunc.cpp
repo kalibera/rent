@@ -28,6 +28,8 @@ const bool DEBUG = false;
 const bool LDEBUG = DEBUG || false;
 const bool ANDEBUG = DEBUG || false;
 
+const unsigned MAX_ARG_DEPTH = 50;
+
 enum ArgValueState {
 
   AVS_UNKNOWN = 0,
@@ -188,12 +190,9 @@ struct ValueState {
     }
     
     // FIXME: this is very restrictive; it won't e.g. be able to handle loops
-    if (kind != other.kind || akind != other.akind || argDepth != other.argDepth) {
-      kind = VSK_UNKNOWN;
-      akind = AVK_NA;
-      argDepth = -1;
-      listAccess.markUnknown();
-      return true;
+    if (kind != other.kind || akind != other.akind || argDepth != other.argDepth || !(listAccess == other.listAccess)) {
+      // FIXME: do we have to compare the list accesses?
+      return setUnknown();
     }
     
     return false;
@@ -217,6 +216,11 @@ struct ValueState {
       changed = true;
     }
     
+    if (!listAccess.isUnknown()) {	
+      listAccess.markUnknown();
+      changed = true;
+    }
+    
     return changed;
   }
   
@@ -225,7 +229,7 @@ struct ValueState {
       return false;
     }
     if (kind == VSK_ARGS) {
-      return akind == other.akind && argDepth == other.argDepth;
+      return akind == other.akind && argDepth == other.argDepth && listAccess == other.listAccess;
     }
     return true;
   }
@@ -259,6 +263,7 @@ struct BlockState {
       checkArityCalled = false;
       changed = true;
     }
+    
     for(ValuesMapTy::iterator mi = vmap.begin(), me = vmap.end(); mi != me; ++mi) {
       
       Value* value = mi->first;
@@ -277,7 +282,7 @@ struct BlockState {
       }
     }
     // NOTE: states in other.vmap that are not in vmap can be ignored, because
-    //   since they are not in vmap, they are to be merged wth unknown state
+    //   since they are not in vmap, they are to be merged with unknown state
     return changed;
   }
   
@@ -346,9 +351,9 @@ struct BlockState_hash {
   }
 };
 
-bool ListAccess_equal::operator() (const ListAccess& lhs, const ListAccess& rhs) const {
-  return lhs.varName == rhs.varName && lhs.isArgsVar == rhs.isArgsVar && lhs.line == rhs.line && lhs.ncdrs == rhs.ncdrs
-    || (!lhs.isUnknown() && !rhs.isUnknown());
+bool ListAccess::operator==(const ListAccess& other) const {
+  return varName == other.varName && isArgsVar == other.isArgsVar && line == other.line && ncdrs == other.ncdrs
+    || (isUnknown() && other.isUnknown());
 };
 
 size_t ListAccess_hash::operator() (const ListAccess& t) const {
@@ -381,8 +386,25 @@ bool isArgument(Value* var, Argument* argsArg) {
   if (Argument *avar = dyn_cast<Argument>(var)) {
     return avar == argsArg;
   }
+  
   if (AllocaInst *v = dyn_cast<AllocaInst>(var)) {
+  
+    bool foundStore = false;
+    for (Value::user_iterator ui = argsArg->user_begin(), ue = argsArg->user_end(); ui != ue; ++ui) {
+      User *u = *ui;
+      if (StoreInst *si = dyn_cast<StoreInst>(u)) {
+        if (si->getPointerOperand() == var) {
+          foundStore = true;
+          break;
+        }
+      }
+    }
+    
+    if (!foundStore) {
+      return false;
+    }
 
+    // FIXME: is the check below needed?
     // there ought be a simpler way in LLVM, but it seems there is not
  
     const Function *f = v->getParent()->getParent();
@@ -601,8 +623,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
   
   evmap.insert({callArg, ValueState(VSK_CALL)});
   evmap.insert({opArg, ValueState(VSK_OP)});
-  evmap.insert({argsArg, ValueState(VSK_ARGS, AVK_CDR, -1)});
-    // depth -1 means that on load, the pointer will get depth 0, which is what we want
+  evmap.insert({argsArg, ValueState(VSK_ARGS, AVK_HEADER, 0)});
   evmap.insert({envArg, ValueState(VSK_ENV)});
   ebs.hash();
   
@@ -618,6 +639,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
   res.complexUseOfArgs = false;
   res.complexUseOfCall = false;
   res.complexUseOfEnv = false;
+  res.confused = false;
   res.listAccesses.clear();
 
   VarNamesTy varNames;   // cache of var names
@@ -626,6 +648,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
     uniqueVarNames = computeUniqueVarNames(fun, varNames);
   }
   AliasVarsTy aliasVars;
+  bool giveUpOnListAccesses = false;
   
   typedef std::unordered_map<int, AllocaInst*> ArgumentAliasVarsMapTy;
     // argument index -> alias variable
@@ -635,6 +658,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
   ArgumentAliasVarsMapTy argAliasVarMap;
   
   if (DEBUG) errs() << "adf: analyzing " << fun->getName() << "\n";
+  
   
   // work-list forward flow analysis (with optional merging/state matching)
   while(!workList.empty()) {
@@ -711,18 +735,19 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
 
       if (LoadInst* li = dyn_cast<LoadInst>(in)) { // load of a variable or through a pointer
         ValueState vs = getVS(vmap, li->getPointerOperand());
-        
+
         if (vs.kind == VSK_ARGS) {
           switch(vs.akind) {
+
             case AVK_TAG:
               res.usesTags = true;
               if (DEBUG) errs() << "   adf: -> TAG load" << *in << "\n";
               break;
+
             case AVK_CAR:
-              if (vs.argDepth >= 0 && vs.argDepth + 1 > res.effectiveArity) {  // FIXME: why the condition "vs.argDepth >= 0" ?
+              if (vs.argDepth + 1 > res.effectiveArity) {
                 res.effectiveArity = vs.argDepth + 1;
               }
-              
               if (resolveListAccesses && !vs.listAccess.isUnknown() && getSourceLine(li) == vs.listAccess.line) {
                 auto asearch = res.listAccesses.find(vs.listAccess);
                 if (asearch == res.listAccesses.end()) {
@@ -768,8 +793,17 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
               
               if (DEBUG) errs() << "   adf: -> CAR load (effective arity now " << std::to_string(res.effectiveArity)  << ") " << *in << "\n";
               break;
+              
             case AVK_CDR:
-              vs.argDepth++; // the default vs.argDepth of -1 becomes 0
+
+              if (giveUpOnListAccesses) {
+                break;
+              }
+              vs.argDepth++;
+              if (vs.argDepth >= MAX_ARG_DEPTH) {
+                if (DEBUG) errs() << "   adf: -> giving up on detection of list accesses, arg depth is too deep (probably a loop)" << *in << "\n";
+                giveUpOnListAccesses = true;
+              }              
               vs.akind = AVK_HEADER;
               
               if (resolveListAccesses) {
@@ -786,7 +820,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
                     // FIXME: this is slightly iffy as it can miss a duplicate list access on a line
                     vs.listAccess.markUnknown();
                   } else {
-                    if (LDEBUG) errs() << "   adf: possible start of list access to variable " << vs.listAccess.varName << " at line " << vs.listAccess.line << "\n";
+                    if (LDEBUG) errs() << "   adf: possible start of list access to variable [CDR load]" << vs.listAccess.varName << " at line " << vs.listAccess.line << "\n";
                   }
 
                 } else if (!vs.listAccess.isUnknown() && vs.listAccess.line == getSourceLine(li)) {
@@ -799,12 +833,31 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
                 }
               }
               
-              vmap[li] = vs;
+              vmap[li] = vs; // now header
               if (DEBUG) errs() << "   adf: -> CDR load (depth now " << std::to_string(vs.argDepth)  << ") " << *in << "\n";
               break;
+              
             case AVK_HEADER:
-              res.complexUseOfArgs = true;
-              if (DEBUG) errs() << "   adf: -> HEADER load, error?" << *in << "\n";
+              Value *val = li->getPointerOperand();
+              if (isa<AllocaInst>(val) || isa<Argument>(val)) {
+                // a pointer to the args list is retrieved from a variable/argument              
+
+                if (resolveListAccesses) {
+                  vs.listAccess.markUnknown();                
+                  // start of possible list access
+                  if (getVarName(val, vs.listAccess.varName, varNames) && getSourceLine(li, vs.listAccess.line)) {
+                    vs.listAccess.ncdrs = 0;
+                    vs.listAccess.isArgsVar = isArgument(val, argsArg);
+                    if (LDEBUG) errs() << "   adf: possible start of list access to variable [HEADER load from variable] " << vs.listAccess.varName << " at line " << vs.listAccess.line << "\n";
+                  }                  
+                }
+                vmap[li] = vs;  
+                if (DEBUG) errs() << "   adf: -> HEADER load from variable/argument " << *in << "\n";
+
+              } else {
+                res.complexUseOfArgs = true;
+                if (DEBUG) errs() << "   adf: -> HEADER load, error? " << *in << "\n";
+              }
               break;
           }
           continue;
@@ -1003,7 +1056,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
         continue;
       }
       
-      if (bs.size() >= maxStatesPerBlock) {
+      if (0 && bs.size() >= maxStatesPerBlock) { // this is now broken (or never worked) due to collection of results in "res"
 
         // merge all states
         for(BlockStatesSetTy::iterator si = bs.begin(), se = bs.end(); si != se; ++si) {
@@ -1023,7 +1076,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
   
   // summarize arg names
   
-  if (resolveArgNames) {
+  if (resolveArgNames && !giveUpOnListAccesses) {
     unsigned nnames = 0;
     
     for(int i = 0; i < res.effectiveArity; i++) {
@@ -1048,12 +1101,22 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
     }
   }
   
+  if (giveUpOnListAccesses) {
+    res.confused = true;
+  }
+  
   return res;
 }
 
 std::string DoFunctionInfo::str() {
 
   std::string res = fun->getName();
+  
+  if (confused) {
+    res += " !CONFUSED";
+    return res;
+  }
+  
   if (complexUseOfCall) {
     res += " !CALL";
   }

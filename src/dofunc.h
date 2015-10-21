@@ -46,6 +46,8 @@ struct ListAccess {
     }
     return pref + varName + suff;
   }
+  
+  bool operator==(const ListAccess& other) const;
 };
 
 struct ListAccess_equal {
@@ -56,7 +58,7 @@ struct ListAccess_hash {
   size_t operator()(const ListAccess& t) const;
 };
 
-typedef std::unordered_map<ListAccess, unsigned, ListAccess_hash, ListAccess_equal> ResolvedListAccessesTy;
+typedef std::unordered_map<ListAccess, unsigned, ListAccess_hash> ResolvedListAccessesTy;
 typedef std::vector<std::string> ArgNamesTy;
 
 struct DoFunctionInfo {
@@ -71,13 +73,15 @@ struct DoFunctionInfo {
   bool complexUseOfCall;
   bool complexUseOfEnv;
   
+  bool confused;         // e.g. due to too many states
+  
   ResolvedListAccessesTy listAccesses;
   ArgNamesTy argNames;
   
   Function *fun;
   
   DoFunctionInfo(Function *fun): fun(fun), checkArityCalled(false), effectiveArity(-1), usesTags(true), computesArgsLength(true),
-    complexUseOfArgs(true), complexUseOfCall(true), complexUseOfEnv(true), listAccesses()  {}; // conservative defaults
+    complexUseOfArgs(true), complexUseOfCall(true), complexUseOfEnv(true), confused(true), listAccesses()  {}; // conservative defaults
     
   std::string str();
 };

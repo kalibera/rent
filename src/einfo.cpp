@@ -130,7 +130,7 @@ int main(int argc, char* argv[]) {
   }
   
   if (0) {
-    errs() << analyzeDoFunction(m->getFunction("do_RNGkind")).str() << "\n";
+    errs() << analyzeDoFunction(m->getFunction("do_begin")).str() << "\n";
   }
   
   if (1) {
