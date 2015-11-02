@@ -39,9 +39,9 @@ static cl::opt<bool> VerboseOption("v", cl::init(false), cl::desc("Verbose outpu
 static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 static cl::extrahelp MoreHelp("\nThe tool rewrites the given C source files of GNU-R, changing (some)\ndo-functions to accept their arguments explicitly, instead of via a linked list.\n");
 
-const bool DEBUG = true;
-const bool DUMP = true;
-const bool WRAPPERS = true;
+const bool DEBUG = false;
+const bool DUMP = false;
+const bool WRAPPERS = false;
 const bool REMOVE_UNUSED_ARGS = true;
 
 struct IRAnalyzer {
@@ -435,8 +435,6 @@ public:
       
       // rewrite argument access 
       
-      llvm::errs() << "Rewriting..\n";
-
       SourceManager& sm = rewriter.getSourceMgr(); // FIXME: may the source manager ever change?
       
 /*      

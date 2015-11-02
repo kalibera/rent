@@ -389,6 +389,8 @@ bool isArgument(Value* var, Argument* argsArg) {
   
   if (AllocaInst *v = dyn_cast<AllocaInst>(var)) {
   
+    // an argument (copied) variable needs to have a store from the argument
+
     bool foundStore = false;
     for (Value::user_iterator ui = argsArg->user_begin(), ue = argsArg->user_end(); ui != ue; ++ui) {
       User *u = *ui;
@@ -425,7 +427,12 @@ bool isArgument(Value* var, Argument* argsArg) {
       
         DIVariable lvar(mnode);
         // FIXME: is this always reliable? Couldn't a value be re-declared?
-        if (lvar.getName() == argsArg->getName() && lvar.isInlinedFnArgument(f)) {
+        if (lvar.getName() == argsArg->getName() /* && lvar.isInlinedFnArgument(f) */) {
+          // note it is not correct to require .isInlinedFnArgument to be true
+          // because it is not true when the argument variable is being overwritten
+          //   e.g. by args = CDR(args)
+          // the semantics of isInlinedFnArgument is a bit iffy
+          
           return true;
         }
       }
@@ -820,7 +827,8 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
                     // FIXME: this is slightly iffy as it can miss a duplicate list access on a line
                     vs.listAccess.markUnknown();
                   } else {
-                    if (LDEBUG) errs() << "   adf: possible start of list access to variable [CDR load]" << vs.listAccess.varName << " at line " << vs.listAccess.line << "\n";
+                    if (LDEBUG) errs() << "   adf: possible start of list access to variable [CDR load]" << vs.listAccess.varName 
+                      << " at line " << vs.listAccess.line << " isArgsVar " << vs.listAccess.isArgsVar << "\n";
                   }
 
                 } else if (!vs.listAccess.isUnknown() && vs.listAccess.line == getSourceLine(li)) {
@@ -848,7 +856,8 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
                   if (getVarName(val, vs.listAccess.varName, varNames) && getSourceLine(li, vs.listAccess.line)) {
                     vs.listAccess.ncdrs = 0;
                     vs.listAccess.isArgsVar = isArgument(val, argsArg);
-                    if (LDEBUG) errs() << "   adf: possible start of list access to variable [HEADER load from variable] " << vs.listAccess.varName << " at line " << vs.listAccess.line << "\n";
+                    if (LDEBUG) errs() << "   adf: possible start of list access to variable [HEADER load from variable] " << vs.listAccess.varName 
+                      << " at line " << vs.listAccess.line << " isArgsVar " << vs.listAccess.isArgsVar << "\n";
                   }                  
                 }
                 vmap[li] = vs;  
