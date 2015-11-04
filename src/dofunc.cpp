@@ -750,6 +750,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
   res.computesArgsLength = false;
   res.primvalCalled = false;
   res.errorcallCalled = false;
+  res.warningcallCalled = false;
   res.check1argCalled = false;
   
   res.complexUseOfOp = false;
@@ -842,6 +843,18 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
             continue; 
           }
         }
+        if (tgt && (tgt->getName() == "Rf_warningcall")) {
+        
+          assert(cs.arg_size() > 1);
+          
+          ValueState vsCall = getVS(vmap, cs.getArgument(0));
+          
+          if (vsCall.kind == VSK_CALL) {
+            res.warningcallCalled = true;
+            if (DEBUG) errs() << "   adf: -> warningcallCalled " << *in << "\n";
+            continue; 
+          }
+        }        
         if (tgt && (tgt->getName() == "Rf_check1arg" || tgt->getName() == "check1arg2")) {
         
           assert(cs.arg_size() > 2);
@@ -1285,6 +1298,9 @@ std::string DoFunctionInfo::str() {
   } else {
     if (errorcallCalled) {
       res += " +errorcall";
+    }
+    if (warningcallCalled) {
+      res += " +warningCall";
     }
   }
   if (!complexUseOfCall && !complexUseOfArgs && !usesTags && check1argCalled) {
