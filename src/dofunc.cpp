@@ -600,6 +600,112 @@ StringSetTy computeUniqueVarNames(Function *fun, VarNamesTy& varNames) {
   return res;
 }
 
+bool handlePRIMVAL(LoadInst *li, DoFunctionInfo& res) {
+
+  // handle PRIMVAL(op)
+  //   this is done through looking to following instructions
+  //   looking for a particular, unoptimized, sequence of instructions
+
+  // FIXME: avoid copy+paste in recovery code
+
+  //  %9 = load %struct.SEXPREC** %3, align 8, !dbg !33582 ; [#uses=1 type=%struct.SEXPREC*] [debug line = 2023:13]
+  //  %10 = getelementptr inbounds %struct.SEXPREC* %9, i32 0, i32 4, !dbg !33582 ; [#uses=1 type=%union.anon*] [debug line = 2023:13]
+  //  %11 = bitcast %union.anon* %10 to %struct.sxpinfo_struct*, !dbg !33582 ; [#uses=1 type=%struct.sxpinfo_struct*] [debug line = 2023:13]
+  //  %12 = getelementptr inbounds %struct.sxpinfo_struct* %11, i32 0, i32 0, !dbg !33582 ; [#uses=1 type=i32*] [debug line = 2023:13]
+  //  %13 = load i32* %12, align 4, !dbg !33582       ; [#uses=1 type=i32] [debug line = 2023:13]
+  //  %14 = sext i32 %13 to i64, !dbg !33582          ; [#uses=1 type=i64] [debug line = 2023:13]
+  //  %15 = getelementptr inbounds [0 x %struct.FUNTAB]* bitcast ([713 x %struct.FUNTAB]* @R_FunTab to [0 x %struct.FUNTAB]*), i32 0, i64 %14, !dbg !33582 ; [#uses=1 type=%struct.FUNTAB*] [debug line = 2023:13]
+  //  %16 = getelementptr inbounds %struct.FUNTAB* %15, i32 0, i32 2, !dbg !33582 ; [#uses=1 type=i32*] [debug line = 2023:13]
+  //  %17 = load i32* %16, align 4, !dbg !33582       ; [#uses=1 type=i32] [debug line = 2023:13]
+  
+  // PRIMVAL(x)       (R_FunTab[(x)->u.primsxp.offset].code)
+
+  if (!li->hasOneUse()) {
+    return false;
+  }
+  GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(li->user_back()); // GEP takes the non-header part of the cell
+  if (!gep || !gep->hasOneUse() || !gep->isInBounds() || gep->getNumIndices() != 2 || !gep->hasAllConstantIndices() ||
+    !cast<ConstantInt>(gep->getOperand(1))->isZero() || cast<ConstantInt>(gep->getOperand(2))->getZExtValue() != 4) {
+    
+    return false;
+  }
+
+  BitCastInst *bc = dyn_cast<BitCastInst>(gep->user_back());
+  if (!bc || !bc->hasOneUse()) {
+    res.complexUseOfOp = true;
+    // FIXME: too restrictive to call this already a complex use?    
+    if (DEBUG) errs() << "   adf: -> complex use of op (loaded value when checking for PRIMVAL)[3] " << *li << "\n";
+    return false;
+  }
+  
+  PointerType *ty = dyn_cast<PointerType>(bc->getDestTy());
+  if (!ty) {
+    res.complexUseOfOp = true;
+    if (DEBUG) errs() << "   adf: -> complex use of op (loaded value when checking for PRIMVAL)[4] " << *li << "\n";
+    return false;
+  }
+  
+  StructType *sty = dyn_cast<StructType>(ty->getElementType());
+    // FIXME: should probably ignore the type, as LLVM chooses a nonsense anyway
+    // the type should instead be primsxp_struct
+    
+  if (!sty || !sty->hasName() || sty->getName() != "struct.sxpinfo_struct") {
+    res.complexUseOfOp = true;
+    if (DEBUG) errs() << "   adf: -> complex use of op (loaded value when checking for PRIMVAL)[5] " << *li << "\n";
+    return false;
+  }
+  
+  GetElementPtrInst *gep2 = dyn_cast<GetElementPtrInst>(bc->user_back()); // GEP takes the first and only ("offset") element of primsxp_struct
+  if (!gep2 || !gep2->hasOneUse() || !gep2->isInBounds() || gep2->getNumIndices() != 2 || !gep2->hasAllZeroIndices()) {
+    
+    res.complexUseOfOp = true;
+    if (DEBUG) errs() << "   adf: -> complex use of op (loaded value when checking for PRIMVAL)[6] " << *li << "\n";
+    return false;
+  }
+  
+  LoadInst *li2 = dyn_cast<LoadInst>(gep2->user_back()); // this loads the offset to the function table
+  if (!li2 || !li2->hasOneUse()) {
+    res.complexUseOfOp = true;
+    if (DEBUG) errs() << "   adf: -> complex use of op (loaded value when checking for PRIMVAL)[7] " << *li << "\n";
+    return false;
+  }
+  
+  SExtInst *si = dyn_cast<SExtInst>(li2->user_back());
+  if (!si || !si->hasOneUse()) {
+    res.complexUseOfOp = true;
+    if (DEBUG) errs() << "   adf: -> complex use of op (loaded value when checking for PRIMVAL)[8] " << *li << "\n";
+    return false;
+  }
+
+  GetElementPtrInst *gep3 = dyn_cast<GetElementPtrInst>(si->user_back()); // GEP finds the entry for the function in the function table
+  if (!gep3 || !gep3->hasOneUse() || !gep3->isInBounds() || gep3->getNumIndices() != 2 || !isa<ConstantInt>(gep3->getOperand(1)) ||
+    !cast<ConstantInt>(gep3->getOperand(1))->isZero() || gep3->getOperand(2) != si) {
+    
+    res.complexUseOfOp = true;
+    if (DEBUG) errs() << "   adf: -> complex use of op (loaded value when checking for PRIMVAL)[9] " << *li << "\n";
+    return false;
+  }
+  
+  GetElementPtrInst *gep4 = dyn_cast<GetElementPtrInst>(gep3->user_back()); // GEP takes the 2nd element of the entry (the primval value)
+  if (!gep4 || !gep4->hasOneUse() || !gep4->isInBounds() || gep4->getNumIndices() != 2 || !gep4->hasAllConstantIndices() ||
+    !cast<ConstantInt>(gep4->getOperand(1))->isZero() || cast<ConstantInt>(gep4->getOperand(2))->getZExtValue() != 2) {
+    
+    res.complexUseOfOp = true;
+    if (DEBUG) errs() << "   adf: -> complex use of op (loaded value when checking for PRIMVAL)[10] " << *li << "\n";
+    return false;
+  }
+  
+  LoadInst *li3 = dyn_cast<LoadInst>(gep4->user_back());
+  if (!li3) {
+    res.complexUseOfOp = true;
+    if (DEBUG) errs() << "   adf: -> complex use of op (loaded value when checking for PRIMVAL)[11] " << *li << "\n";
+    return false;
+  }
+  if (DEBUG) errs() << "   adf: -> detected PRIMVAL(op) " << *li << "\n";
+  res.primvalCalled = true;
+  return true;
+}
+
 // FIXME: should also support integers, integer guards, length of the arg list, related guards on nil value
 DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool resolveArgNames) {
 
@@ -639,9 +745,13 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
   // prepare results
   DoFunctionInfo res(fun);  
   res.checkArityCalled = true; // this has a rather iffy semantics
+  res.effectiveArity = 0;
   res.usesTags = false;
   res.computesArgsLength = false;
-  res.effectiveArity = 0;
+  res.primvalCalled = false;
+  res.errorcallCalled = false;
+  res.check1argCalled = false;
+  
   res.complexUseOfOp = false;
   res.complexUseOfArgs = false;
   res.complexUseOfCall = false;
@@ -714,6 +824,36 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
             
             s.checkArityCalled = true;
             if (DEBUG) errs() << "   adf: -> checkArityCalled " << *in << "\n";
+            continue;
+          } else {
+            if (DEBUG) errs() << "   adf: -> unsupported/unexpected form of checkArityCall " << *in << "\n";
+            if (DEBUG) s.dump();
+          }
+        }
+        if (tgt && (tgt->getName() == "Rf_errorcall")) {
+        
+          assert(cs.arg_size() > 1);
+          
+          ValueState vsCall = getVS(vmap, cs.getArgument(0));
+          
+          if (vsCall.kind == VSK_CALL) {
+            res.errorcallCalled = true;
+            if (DEBUG) errs() << "   adf: -> errorcallCalled " << *in << "\n";
+            continue; 
+          }
+        }
+        if (tgt && (tgt->getName() == "Rf_check1arg" || tgt->getName() == "check1arg2")) {
+        
+          assert(cs.arg_size() > 2);
+          
+          ValueState vsArgs = getVS(vmap, cs.getArgument(0));
+          ValueState vsCall = getVS(vmap, cs.getArgument(1));
+          
+          if (vsCall.kind == VSK_CALL && vsArgs.kind == VSK_ARGS && vsArgs.akind == AVK_HEADER &&
+            vsArgs.argDepth == 0) {
+            
+            res.check1argCalled = true;
+            if (DEBUG) errs() << "   adf: -> check1arg or check1arg2 called " << *in << "\n";
             continue;
           }
         }
@@ -873,6 +1013,15 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
           // by default, list accesses are left unknown
         } // handled loading of VSK_ARGS
         
+        if (vs.kind == VSK_OP) {
+
+          if (handlePRIMVAL(li, res)) {
+            continue;
+          }
+          
+        } // handle loading of VSK_OP
+        
+        
         if (vs.kind != VSK_UNKNOWN) {
           if (resolveListAccesses) {
             vs.listAccess.markUnknown();
@@ -914,6 +1063,11 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
                 continue;
               }
               BitCastInst *bc = dyn_cast<BitCastInst>(gep->user_back());
+              if (!bc) {
+                res.complexUseOfArgs = true;
+                if (DEBUG) errs() << "   adf: -> complex use of args (unsupported load of cell header) " << *in << "\n";
+                continue;
+              }
               PointerType *ty = dyn_cast<PointerType>(bc->getDestTy());
               if (!ty) {
                 res.complexUseOfArgs = true;
@@ -1128,9 +1282,20 @@ std::string DoFunctionInfo::str() {
   
   if (complexUseOfCall) {
     res += " !CALL";
+  } else {
+    if (errorcallCalled) {
+      res += " +errorcall";
+    }
+  }
+  if (!complexUseOfCall && !complexUseOfArgs && !usesTags && check1argCalled) {
+    res += " +check1arg";
   }
   if (complexUseOfOp) {
     res += " !OP";
+  } else {
+    if (primvalCalled) {
+      res += " +PRIMVAL"; 
+    }
   }
   if (complexUseOfArgs) {
     res += " !ARGS";

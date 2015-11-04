@@ -67,6 +67,9 @@ struct DoFunctionInfo {
   int effectiveArity;    // maximum index of argument value used + 1
   bool usesTags;	 // a tag may be used
   bool computesArgsLength;	// uses length on args (or some suffix of it)
+  bool primvalCalled;	// uses "op" with PRIMVAL(op)
+  bool errorcallCalled;	// uses "call" with errorcall
+  bool check1argCalled; // uses "call" and "args" with check1arg or check1arg2
 
   bool complexUseOfArgs; // anything except loading arg value, arg tag, calling checkArity
   bool complexUseOfOp;   // any use except checkArity
@@ -80,7 +83,9 @@ struct DoFunctionInfo {
   
   Function *fun;
   
+    // FIXME: the defaults are not really used/needed
   DoFunctionInfo(Function *fun): fun(fun), checkArityCalled(false), effectiveArity(-1), usesTags(true), computesArgsLength(true),
+    primvalCalled(true), errorcallCalled(true), check1argCalled(true),
     complexUseOfArgs(true), complexUseOfCall(true), complexUseOfEnv(true), confused(true), listAccesses()  {}; // conservative defaults
     
   std::string str();
