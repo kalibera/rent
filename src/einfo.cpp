@@ -166,7 +166,7 @@ int main(int argc, char* argv[]) {
         }
         
         errs() << nfo.str() << " " << dumpFunctionArities(uniqueFunctionArities(fun, funtab), nfo.effectiveArity) << 
-          (e.isSpecial() ? " SPECIAL" : " BUILTIN"); 
+          (e.isSpecial() ? " SPECIAL" : " BUILTIN") << " " << (e.isPrimitive() ? "PRIMITIVE" : "INTERNAL"); 
           
         errs() << " " << funLocation(fun) << "\n";
       }

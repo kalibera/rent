@@ -43,6 +43,7 @@ const bool DEBUG = false;
 const bool DUMP = false;
 const bool WRAPPERS = false;
 const bool REMOVE_UNUSED_ARGS = true;
+const bool COE = true; // functions that cannot have the args removed will take SEXP call, SEXP op, SEXP env, SEXP arg1...SEXP argn
 
 struct IRAnalyzer {
 
@@ -76,7 +77,7 @@ struct IRAnalyzer {
 //   returns false if the function is not a do function or is not simple
 //   simple implies fixed number of arguments and all accesses resolved
 
-bool getDoFunctionInfo(std::string funName, ResolvedListAccessesTy &listAccesses, unsigned &arity) {
+bool getDoFunctionInfo(std::string funName, ResolvedListAccessesTy &listAccesses, unsigned &arity, bool& needsCoe) {
 
   static IRAnalyzer ir(BitcodeFilename.getValue());
 
@@ -94,14 +95,15 @@ bool getDoFunctionInfo(std::string funName, ResolvedListAccessesTy &listAccesses
   int a = maxArity(fun, ir.funtab);
   
   DoFunctionInfo nfo = analyzeDoFunction(fun);
-  if (nfo.usesTags || nfo.computesArgsLength || nfo.complexUseOfArgs || 
-    nfo.complexUseOfOp || nfo.complexUseOfCall || nfo.complexUseOfEnv /* FIXME: these could perhaps be allowed? */ ||
+  if (nfo.usesTags || nfo.computesArgsLength || nfo.complexUseOfArgs || nfo.check1argCalled ||
     !nfo.checkArityCalled || nfo.effectiveArity < 0 || a != nfo.effectiveArity) {
     
     if (VerboseOption.getValue() || DEBUG) llvm::errs() << "Not analyzing function " << funName << " which is not simple: " << nfo.str() << 
       " (nominal arity " << std::to_string(a) << ")\n";
     return false;
   }
+  
+  needsCoe = nfo.complexUseOfOp || nfo.complexUseOfCall || nfo.complexUseOfEnv || nfo.errorcallCalled || nfo.warningcallCalled || nfo.primvalCalled;
   
   arity = a;
   listAccesses = nfo.listAccesses;
@@ -624,8 +626,7 @@ public:
     }
 
     unsigned arity;
-    
-    if (!getDoFunctionInfo(f->getNameAsString(), resolvedListAccesses, arity)) {
+    if (!getDoFunctionInfo(f->getNameAsString(), resolvedListAccesses, arity, needsCoe)) {
       inDoFunction = false;
       return true;
     }
@@ -637,6 +638,7 @@ public:
     if (DEBUG) llvm::errs() << "Rewriting/analyzing simple function " << funName << "\n";
     
     if (WRAPPERS) {
+
       // rename the function being rewritten
       //    and create a wrapper for it
       //
@@ -645,6 +647,11 @@ public:
       // {
       
       // make the original function static
+
+      if (COE) {
+        llvm::errs() << "ERROR: WRAPPERS with COE are not supported\n";
+        exit(1);
+      }
       
       SourceManager& sm = rewriter.getSourceMgr();
       rewriter.ReplaceText(SourceRange(sm.getFileLoc(f->getSourceRange().getBegin()), sm.getFileLoc(f->getLocation())), "static SEXP " + funName + "_earg");
@@ -708,7 +715,9 @@ public:
       rewriter.ReplaceText(SourceRange(commaAfterOpLoc, commaAfterArgsLoc), ","); // we delete ", SEXP args,", so we have to add a comma
     }
     
-    if (REMOVE_UNUSED_ARGS) {
+    SourceManager& sm = rewriter.getSourceMgr();
+    
+    if (REMOVE_UNUSED_ARGS && !needsCoe) {
       // remove call, op and env arguments if unused
       //   (currently, we are only rewriting so simple functions that they never use these arguments for anything but
       //   checkArity, and we remove the checkArity call anyway)
@@ -722,7 +731,7 @@ public:
       
         SourceLocation commaAfterOpLoc = endOfTokenLoc(opDecl->getLocEnd());
         
-        SourceManager& sm = rewriter.getSourceMgr();
+        
         unsigned i = 0;
         const char *after = sm.getCharacterData(commaAfterOpLoc);
         while (isspace(after[i])) i++;  // skip whitespace, usually the " " in ", SEXP arg"
@@ -733,13 +742,32 @@ public:
         rewriter.RemoveText(SourceRange(callDecl->getLocStart(), opDecl->getLocEnd())); // remove "call, op" arguments
       
         SourceLocation commaAfterArgsLoc = endOfTokenLoc(f->getParamDecl(2)->getLocEnd());
-        
         rewriter.RemoveText(SourceRange(commaAfterArgsLoc, envDecl->getLocEnd())); // removes ", SEXP env" (last argument including the comma before it)
         
       } else {
         // no args argument
         rewriter.RemoveText(SourceRange(callDecl->getLocStart(), envDecl->getLocEnd())); // removes all arguments
       }
+    }
+    
+    if (needsCoe) {
+      // move the SEXP env argument before "args"
+      
+      ParmVarDecl *opDecl = f->getParamDecl(1);
+      ParmVarDecl *argsDecl = f->getParamDecl(2);
+      ParmVarDecl *envDecl = f->getParamDecl(3);
+
+      SourceLocation commaAfterOpLoc = endOfTokenLoc(opDecl->getLocEnd());
+      SourceLocation commaAfterArgsLoc = endOfTokenLoc(argsDecl->getLocEnd());
+      
+      const char *srcfrom = sm.getCharacterData(commaAfterArgsLoc);
+      const char *srcto = sm.getCharacterData(endOfTokenLoc(envDecl->getLocEnd()));
+      
+      if (srcto > srcfrom) {  // copy "SEXP env" before "SEXP args"
+        rewriter.InsertTextAfter(commaAfterOpLoc, StringRef(srcfrom, srcto - srcfrom));  // FIXME: why not "+1" ?
+      }
+      
+      rewriter.RemoveText(SourceRange(commaAfterArgsLoc, envDecl->getLocEnd())); // removes ", SEXP env" (last argument including the comma before it)
     }
     
     return true;
@@ -783,6 +811,7 @@ private:
   FunctionDecl *checkArityFunDecl = NULL;
   
   bool inDoFunction; // FIXME: is this flag needed?
+  bool needsCoe;
   
   KnownAccessesTy knownAccesses; // already known list accesses (for detection in AST graph)
   ResolvedListAccessesTy resolvedListAccesses; // list accesses detected and resolved at IR level
