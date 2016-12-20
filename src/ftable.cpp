@@ -93,7 +93,7 @@ bool readFunctionTable(Module *m, FunctionTableTy& tbl) {
   return true;  
 }
 
-bool dumpFunctions(FunctionTableTy& funtab, std::string type, bool isInternal, bool isPrimitive, bool isBuiltin, bool isSpecial) {
+void dumpFunctions(FunctionTableTy& funtab, std::string type, bool isInternal, bool isPrimitive, bool isBuiltin, bool isSpecial) {
   unsigned cnt;
   
   cnt = 0;

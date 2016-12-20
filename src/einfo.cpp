@@ -1,4 +1,4 @@
-
+  
 #include "dofunc.h"
 #include "ftable.h"
 
@@ -56,20 +56,18 @@ bool sourceLocation(const Instruction *in, std::string& path, unsigned& line) {
   }
   const DebugLoc& debugLoc = in->getDebugLoc();
   
-  if (debugLoc.isUnknown()) {
+  if (!debugLoc) {
     path = "/unknown";
     line = 0;
     return false;
   }
 
   line = debugLoc.getLine();  
-  
-  DIScope scope(debugLoc.getScope());
-  if (scope) {
-    if (sys::path::is_absolute(scope.getFilename())) {
-      path = scope.getFilename().str();
+  if (DIScope *scope = dyn_cast<DIScope>(debugLoc.getScope())) {
+    if (sys::path::is_absolute(scope->getFilename())) {
+      path = scope->getFilename().str();
     } else {
-      path = scope.getDirectory().str() + "/" + scope.getFilename().str();
+      path = scope->getDirectory().str() + "/" + scope->getFilename().str();
     }
   }
   return true;
@@ -92,14 +90,13 @@ std::string funLocation(const Function *f) {
   const Instruction *instWithDI = NULL;
   for(Function::const_iterator bb = f->begin(), bbe = f->end(); !instWithDI && bb != bbe; ++bb) {
     for(BasicBlock::const_iterator in = bb->begin(), ine = bb->end(); !instWithDI && in != ine; ++in) {
-      if (!in->getDebugLoc().isUnknown()) {
-        instWithDI = in;
+      if (in->getDebugLoc()) {
+        instWithDI = &*in;
       }
     }
   }
   return sourceLocation(instWithDI);
 }
-
 
 int main(int argc, char* argv[]) {
 
@@ -169,6 +166,15 @@ int main(int argc, char* argv[]) {
           (e.isSpecial() ? " SPECIAL" : " BUILTIN") << " " << (e.isPrimitive() ? "PRIMITIVE" : "INTERNAL"); 
           
         errs() << " " << funLocation(fun) << "\n";
+        
+        if (0) {
+          ResolvedListAccessesTy& listAccesses = nfo.listAccesses;
+          for(ResolvedListAccessesTy::const_iterator li = listAccesses.begin(), le = listAccesses.end(); li != le; ++li) {
+            ListAccess& la = const_cast<ListAccess&>(li->first);
+            unsigned aindex = li->second;
+              errs() << "    " << la.str() << "  arg " << std::to_string(aindex) << "\n";
+          }
+        }
       }
     }
   }

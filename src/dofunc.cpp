@@ -79,10 +79,10 @@ bool ensuresArity(Function *fun) {
   assert(nargs == 4);
   Function::arg_iterator ai = fun->arg_begin();
 
-  Argument *callArg = ai++;
-  Argument *opArg = ai++;
-  Argument *argsArg = ai++;
-  Argument *envArg = ai++;
+  Argument *callArg = &*ai++;
+  Argument *opArg = &*ai++;
+  Argument *argsArg = &*ai++;
+  Argument *envArg = &*ai++;
   
   map.insert({callArg, AVS_CALL});
   map.insert({opArg, AVS_OP});
@@ -90,7 +90,7 @@ bool ensuresArity(Function *fun) {
   map.insert({envArg, AVS_ENV});
   
   for(BasicBlock::iterator ii = bb->begin(), ie = bb->end(); ii != ie; ++ii) {
-    Instruction *in = ii;
+    Instruction *in = &*ii;
     
     CallSite cs(in);
     if (cs) {
@@ -413,29 +413,15 @@ bool isArgument(Value* var, Argument* argsArg) {
     for(const_inst_iterator ii = inst_begin(*f), ie = inst_end(*f); ii != ie; ++ii) {
       const Instruction *in = &*ii;
   
-      MDNode *mnode = NULL;
       if (const DbgDeclareInst *ddi = dyn_cast<DbgDeclareInst>(in)) {
         if (ddi->getAddress() == var) {
-          mnode = ddi->getVariable();
+          if (ddi->getVariable()->getName() == argsArg->getName()) return true;
         }
       } else if (const DbgValueInst *dvi = dyn_cast<DbgValueInst>(in)) {
-        if (dvi->getValue() == var) {
-          mnode = dvi->getVariable();
+          if (dvi->getValue() == var) {
+            if (dvi->getVariable()->getName() == argsArg->getName()) return true;
         }
-      }
-      if (mnode) {
-      
-        DIVariable lvar(mnode);
-        // FIXME: is this always reliable? Couldn't a value be re-declared?
-        if (lvar.getName() == argsArg->getName() /* && lvar.isInlinedFnArgument(f) */) {
-          // note it is not correct to require .isInlinedFnArgument to be true
-          // because it is not true when the argument variable is being overwritten
-          //   e.g. by args = CDR(args)
-          // the semantics of isInlinedFnArgument is a bit iffy
-          
-          return true;
-        }
-      }
+      }  
     }
   }
   
@@ -443,39 +429,36 @@ bool isArgument(Value* var, Argument* argsArg) {
 }
 
 // empty variable names means the name is unknown
-std::string computeVarName(const Value *var) {
+// copied from rchk with some mods (needed?)
+
+std::string computeVarName(const Value *value) {
+  if (!value) return "";
+  const AllocaInst *var = dyn_cast<AllocaInst>(value);
+//  if (!var) return "NULL";
   if (!var) return "";
   std::string name = var->getName().str();
   if (!name.empty()) {
     return name;
   }
 
-  if (isa<Argument>(var)) {
-    return name;
-  }
-  
-  if (const AllocaInst *v = dyn_cast<AllocaInst>(var)) {
-    const Function *f = v->getParent()->getParent();
+  const Function *f = var->getParent()->getParent();
 
-    // there ought be a simpler way in LLVM, but it seems there is not  
-    for(const_inst_iterator ii = inst_begin(*f), ie = inst_end(*f); ii != ie; ++ii) {
-      const Instruction *in = &*ii;
+  // there ought be a simpler way in LLVM, but it seems there is not  
+  for(const_inst_iterator ii = inst_begin(*f), ie = inst_end(*f); ii != ie; ++ii) {
+    const Instruction *in = &*ii;
   
-      if (const DbgDeclareInst *ddi = dyn_cast<DbgDeclareInst>(in)) {
-        if (ddi->getAddress() == v) {
-          DIVariable dvar(ddi->getVariable());
-          return dvar.getName();
-        }
-      } else if (const DbgValueInst *dvi = dyn_cast<DbgValueInst>(in)) {
-        if (dvi->getValue() == v) {
-          DIVariable dvar(dvi->getVariable());
-          return dvar.getName();
-        }
+    if (const DbgDeclareInst *ddi = dyn_cast<DbgDeclareInst>(in)) {
+      if (ddi->getAddress() == var) {
+        return ddi->getVariable()->getName();
+      }
+    } else if (const DbgValueInst *dvi = dyn_cast<DbgValueInst>(in)) {
+      if (dvi->getValue() == var) {
+        return dvi->getVariable()->getName();
       }
     }
   }
-  
-  return "";
+//  return "<unnamed var: " + instructionAsString(var) + ">";
+  return "";  
 }
 
 typedef std::map<const Value*, std::string> VarNamesTy;
@@ -503,7 +486,7 @@ bool getVarName(const Value *var, std::string& name, VarNamesTy& cache) {
 bool getSourceLine(Instruction *inst, unsigned &line) {
   const DebugLoc& debugLoc = inst->getDebugLoc();
   
-  if (debugLoc.isUnknown()) {
+  if (!debugLoc) {
     return false;
   }
   
@@ -729,10 +712,10 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
   assert(nargs == 4);
   Function::arg_iterator ai = fun->arg_begin();
 
-  Argument *callArg = ai++;
-  Argument *opArg = ai++;
-  Argument *argsArg = ai++;
-  Argument *envArg = ai++;
+  Argument *callArg = &*ai++;
+  Argument *opArg = &*ai++;
+  Argument *argsArg = &*ai++;
+  Argument *envArg = &*ai++;
   
   evmap.insert({callArg, ValueState(VSK_CALL)});
   evmap.insert({opArg, ValueState(VSK_OP)});
@@ -801,7 +784,7 @@ DoFunctionInfo analyzeDoFunction(Function *fun, bool resolveListAccesses, bool r
     if (DEBUG) s.dump();
     
     for(BasicBlock::iterator ii = bb->begin(), ie = bb->end(); ii != ie; ++ii) {
-      Instruction *in = ii;
+      Instruction *in = &*ii;
 
       // TODO: add support for *LENGTH, *length or args, and hence also integer guards
       // TODO: add support for address taken
