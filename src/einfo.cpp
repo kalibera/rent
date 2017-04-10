@@ -1,6 +1,7 @@
   
 #include "dofunc.h"
 #include "ftable.h"
+#include "call.h"
 
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DebugInfo.h>
@@ -165,6 +166,13 @@ int main(int argc, char* argv[]) {
         errs() << nfo.str() << " " << dumpFunctionArities(uniqueFunctionArities(fun, funtab), nfo.effectiveArity) << 
           (e.isSpecial() ? " SPECIAL" : " BUILTIN") << " " << (e.isPrimitive() ? "PRIMITIVE" : "INTERNAL"); 
           
+        if (1) {
+          if (!e.isPrimitive()) {
+            if (mayCall(fun, m->getFunction("Rf_errorcall"), m->getFunction("Rf_error"))) errs() << "!!!errorcall";
+          } else {
+            if (mayCall(fun, m->getFunction("Rf_error"), m->getFunction("Rf_errorcall"))) errs() << "!!!error";
+          }
+        }
         errs() << " " << funLocation(fun) << "\n";
         
         if (0) {
